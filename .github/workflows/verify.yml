@@ -30,8 +30,18 @@ jobs:
       - name: Install dependencies
         run: pip install requests "qrcode[pil]"
 
-      - name: Security scan (凭据/密钥/私人信息)
-        run: python tools/security_scan.py --all
+      - name: Checks (安全扫描 + 自动化测试)
+        run: |
+          set -o pipefail
+          {
+            echo "=== 安全扫描 ==="
+            python tools/security_scan.py --all
+            echo "=== 自动化测试 ==="
+            python -m unittest discover -s tests -v
+          } 2>&1 | tee "$RUNNER_TEMP/check.log"
 
-      - name: Tests (调度器 / 网页版 / 命令行 / 扫描器)
-        run: python -m unittest discover -s tests -v
+      - name: Report errors on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python tools/report_ci_failure.py

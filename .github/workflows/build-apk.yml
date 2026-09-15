@@ -30,10 +30,20 @@ jobs:
           python-version: "3.12"
       - name: Install dependencies
         run: pip install requests "qrcode[pil]"
-      - name: Security scan
-        run: python tools/security_scan.py --all
-      - name: Tests
-        run: python -m unittest discover -s tests
+      - name: Checks (安全扫描 + 自动化测试)
+        run: |
+          set -o pipefail
+          {
+            echo "=== 安全扫描 ==="
+            python tools/security_scan.py --all
+            echo "=== 自动化测试 ==="
+            python -m unittest discover -s tests
+          } 2>&1 | tee "$RUNNER_TEMP/check.log"
+      - name: Report errors on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python tools/report_ci_failure.py
 
   apk:
     needs: gate
@@ -100,64 +110,11 @@ jobs:
           ls -l ../BiliLiveLike.apk
 
       # 构建失败时把关键错误行贴成提交评论 (便于无人值守排查)
-      - name: Report build errors
+      - name: Report errors on failure
         if: failure()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          cat > "$RUNNER_TEMP/report.py" <<'PYEOF'
-          import json, os, re, urllib.request
-
-          log_path = os.path.join(os.environ.get("RUNNER_TEMP", "/tmp"), "build.log")
-          lines = []
-          if os.path.exists(log_path):
-              with open(log_path, encoding="utf-8", errors="replace") as f:
-                  lines = f.read().splitlines()
-
-          def is_frame(s):
-              t = s.strip()
-              return t.startswith("at ") or t.startswith("... ")
-
-          sel = []
-          # 1) javac / kotlinc 的报错行 (带后两行上下文)
-          for i, ln in enumerate(lines):
-              if re.search(r"\berror:\s", ln) or re.search(r"^e: ", ln.strip()):
-                  sel.extend([x for x in lines[i:i + 3] if not is_frame(x)])
-          # 2) Gradle 的失败概览段落
-          for i, ln in enumerate(lines):
-              if "What went wrong" in ln or "Execution failed for task" in ln:
-                  sel.extend([x for x in lines[i:i + 40] if not is_frame(x)])
-          # 3) 兜底: 最后 60 行里去掉堆栈帧
-          if not sel:
-              sel = [x for x in lines[-60:] if not is_frame(x)]
-
-          seen, uniq = set(), []
-          for x in sel:
-              if x.strip() and x not in seen:
-                  seen.add(x)
-                  uniq.append(x)
-          text = "\n".join(uniq[:70])[:6500] or "(没有解析到错误行)"
-
-          body = {"body": "APK 构建失败，关键日志：\n\n```\n" + text + "\n```"}
-          repo = os.environ["GITHUB_REPOSITORY"]
-          sha = os.environ["GITHUB_SHA"]
-          req = urllib.request.Request(
-              f"https://api.github.com/repos/{repo}/commits/{sha}/comments",
-              data=json.dumps(body).encode(),
-              headers={
-                  "Authorization": "Bearer " + os.environ["GH_TOKEN"],
-                  "Accept": "application/vnd.github+json",
-                  "Content-Type": "application/json",
-              },
-              method="POST",
-          )
-          try:
-              with urllib.request.urlopen(req, timeout=30) as r:
-                  print("comment posted:", r.status)
-          except Exception as e:
-              print("post failed:", e)
-          PYEOF
-          python3 "$RUNNER_TEMP/report.py"
+        run: python tools/report_ci_failure.py
 
       - name: Upload Artifact (Actions 页面可下载)
         uses: actions/upload-artifact@v4

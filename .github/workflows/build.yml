@@ -25,10 +25,20 @@ jobs:
           python-version: "3.12"
       - name: Install dependencies
         run: pip install requests "qrcode[pil]"
-      - name: Security scan
-        run: python tools/security_scan.py --all
-      - name: Tests
-        run: python -m unittest discover -s tests
+      - name: Checks (安全扫描 + 自动化测试)
+        run: |
+          set -o pipefail
+          {
+            echo "=== 安全扫描 ==="
+            python tools/security_scan.py --all
+            echo "=== 自动化测试 ==="
+            python -m unittest discover -s tests
+          } 2>&1 | tee "$RUNNER_TEMP/check.log"
+      - name: Report errors on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python tools/report_ci_failure.py
 
   build:
     needs: gate
