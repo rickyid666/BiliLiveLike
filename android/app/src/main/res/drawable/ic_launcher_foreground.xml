@@ -1,0 +1,16 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 心形图标 (点赞意象): 两个圆 + 一个三角 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M41,40 m-13,0 a13,13 0 1,0 26,0 a13,13 0 1,0 -26,0" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M67,40 m-13,0 a13,13 0 1,0 26,0 a13,13 0 1,0 -26,0" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M29,44 L79,44 L54,82 Z" />
+</vector>

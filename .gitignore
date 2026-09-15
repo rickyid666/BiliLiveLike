@@ -10,3 +10,13 @@ __pycache__/
 build/
 dist/
 *.spec
+
+# Android / Gradle
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+*.iml
+*.apk
+*.keystore

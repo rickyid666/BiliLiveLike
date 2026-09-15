@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">BiliLiveLike</string>
+    <string name="login_title">登录哔哩哔哩</string>
+    <string name="login_hint">登录成功后会自动返回</string>
+</resources>

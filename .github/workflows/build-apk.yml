@@ -1,0 +1,55 @@
+name: Build APK
+
+# 发布 Release 需要写权限
+permissions:
+  contents: write
+
+on:
+  # 手动触发: 仓库 Actions 页面点 Run workflow -> Build APK
+  workflow_dispatch:
+  # 推送 v 开头的标签时自动构建并发布 Release
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: "8.7"
+
+      - name: Build debug APK (可直接安装)
+        working-directory: android
+        run: gradle assembleDebug --no-daemon --stacktrace
+
+      - name: Rename APK
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk BiliLiveLike.apk
+
+      - name: Upload Artifact (Actions 页面可下载)
+        uses: actions/upload-artifact@v4
+        with:
+          name: BiliLiveLike-apk
+          path: BiliLiveLike.apk
+          if-no-files-found: error
+
+      - name: Create GitHub Release (仅打 tag 时)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: BiliLiveLike.apk
+          generate_release_notes: false
