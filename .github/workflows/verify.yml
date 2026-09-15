@@ -9,7 +9,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  # 需要 write 才能把失败日志贴成提交评论 (仅用于失败上报; 扫描/测试本身只读)
+  contents: write
 
 jobs:
   verify:

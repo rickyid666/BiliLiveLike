@@ -166,6 +166,14 @@ def main():
                          for f, l, r, d in findings],
             "gitignore": problems,
         }, ensure_ascii=False, indent=2))
+    elif os.environ.get("GITHUB_ACTIONS") == "true":
+        # 用 GitHub 注解输出: 这些会出现在 check-run annotations 里, 无需任何凭据就能读到
+        for f, l, r, d in findings:
+            print("::error file=%s,line=%s,title=%s::%s" % (f, l or 1, r, d))
+        for p2 in problems:
+            print("::error title=.gitignore::%s" % p2)
+        if ok:
+            print("::notice::security scan passed (%d files)" % len(files))
     else:
         if findings:
             print("=" * 60)
