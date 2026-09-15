@@ -104,9 +104,24 @@ class LogWriter:
 # ============================================================
 #  业务封装
 # ============================================================
+_APP_LOCK = threading.Lock()
+
+
 def ensure_app():
+    """获取全局唯一的 BiliLikeApi 实例(懒加载 + 双检锁)
+
+    这个锁不是可有可无的优化, 它修的是一个真实竞态:
+    ThreadingHTTPServer 每个请求跑一个线程, 启动时还有一个 refresh_account 线程,
+    BiliLikeApi 的构造函数里要做网络预取(耗时数秒), 竞态窗口很大。
+    没有锁时两个线程都会各自 new 一个实例, 后写的覆盖 ST.app ——
+    极端情况下一个请求把房间加到 A 实例, 下一个请求操作的是 B 实例,
+    对外表现就是"刚加进去的房间莫名消失"。
+    (网页端 e2e 测试曾以约 1/3 的概率复现此现象)
+    """
     if ST.app is None:
-        ST.app = core.BiliLikeApi()
+        with _APP_LOCK:
+            if ST.app is None:            # 双检: 保证只构造一次
+                ST.app = core.BiliLikeApi()
     return ST.app
 
 
@@ -408,6 +423,12 @@ def main():
     html_path = next((p for p in cands if os.path.exists(p)), cands[0])
 
     host = "0.0.0.0" if args.lan else "127.0.0.1"
+
+    # 先在主线程把 app 建起来再开始监听:
+    # 构造函数里有网络预取(数秒), 放在这里可以让"启动线程 / 第一个请求线程"都不可能
+    # 撞进构造窗口, 顺带消掉首个请求的额外延迟。
+    ensure_app()
+
     srv = ThreadingHTTPServer((host, args.port), build_handler(html_path))
     url = f"http://127.0.0.1:{args.port}"
     # 用核心里的编码安全 print: stdout 被重定向/cp1252 区域时, 中文横幅不能把服务打崩

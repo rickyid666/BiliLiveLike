@@ -143,5 +143,59 @@ class WebApiTest(unittest.TestCase):
         self.assertIn("next", r)
 
 
+class AppSingletonTest(unittest.TestCase):
+    """ensure_app() 的并发回归测试
+
+    真实故障: ensure_app() 原本是无锁的 `if ST.app is None: ST.app = new()`,
+    而 BiliLikeApi 构造函数里有数秒的网络预取, 竞态窗口很大。
+    ThreadingHTTPServer 每请求一线程 + 启动时还有个 refresh_account 线程,
+    于是可能造出两个实例: 一个请求加到 A 实例、下一个请求操作 B 实例,
+    表现为"刚加进去的房间消失"(网页端 e2e 曾以约 1/3 概率复现)。
+    """
+
+    def test_concurrent_ensure_app_creates_one_instance(self):
+        sys.path.insert(0, ROOT)
+        import threading as _th
+
+        import bili_like_api as core_mod
+        import web_server as ws
+
+        created = []
+        real_cls = core_mod.BiliLikeApi
+
+        class SlowFake:
+            """带延迟的假实例: 放大竞态窗口, 让无锁实现必然暴露"""
+
+            def __init__(self):
+                time.sleep(0.05)
+                created.append(self)
+
+        ws.core.BiliLikeApi = SlowFake          # web_server 用的是 core.BiliLikeApi
+        saved_app = ws.ST.app
+        ws.ST.app = None
+        try:
+            results = []
+            lock = _th.Lock()
+
+            def worker():
+                inst = ws.ensure_app()
+                with lock:
+                    results.append(inst)
+
+            threads = [_th.Thread(target=worker) for _ in range(8)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(10)
+
+            self.assertEqual(len(created), 1,
+                             "并发调用只应构造一个实例, 实际构造了 %d 个" % len(created))
+            self.assertEqual(len({id(r) for r in results}), 1,
+                             "所有调用者都应拿到同一个实例")
+        finally:
+            ws.core.BiliLikeApi = real_cls
+            ws.ST.app = saved_app
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
