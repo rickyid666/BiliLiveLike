@@ -178,7 +178,7 @@ public class MainActivity extends Activity {
                         out = engine.status();
                         // 任务自然结束(达标/登录失效)时收掉前台服务
                         if (!engine.running() && serviceOn) {
-                            runOnUiThread(this::stopForegroundService);
+                            runOnUiThread(MainActivity.this::stopForegroundService);
                         }
                         break;
 
@@ -234,7 +234,7 @@ public class MainActivity extends Activity {
 
                     case "stop":
                         engine.stop();
-                        runOnUiThread(this::stopForegroundService);
+                        runOnUiThread(MainActivity.this::stopForegroundService);
                         out.put("ok", true);
                         break;
 
