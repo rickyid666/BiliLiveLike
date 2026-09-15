@@ -3,12 +3,14 @@ plugins {
 }
 
 // 固定签名: 从环境变量读取 (CI 里由仓库 Secret 注入), 没配置就退回 debug 签名
+def nonEmpty = { v -> v != null && !v.trim().isEmpty() }
 def ksPath = System.getenv("ANDROID_KEYSTORE_PATH")
 def ksPass = System.getenv("ANDROID_KEYSTORE_PASSWORD")
 def keyAlias = System.getenv("ANDROID_KEY_ALIAS")
 def keyPass = System.getenv("ANDROID_KEY_PASSWORD")
-def hasSigning = ksPath != null && ksPass != null && keyAlias != null && keyPass != null
-        && file(ksPath).exists()
+// 注意: 环境变量存在但为空字符串也算"没配置" —— file('') 会直接抛异常
+def hasSigning = nonEmpty(ksPath) && nonEmpty(ksPass)
+        && nonEmpty(keyAlias) && nonEmpty(keyPass) && file(ksPath).exists()
 
 android {
     namespace 'com.rickyid666.bililivelike'
