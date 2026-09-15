@@ -25,21 +25,30 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install requests qrcode pyinstaller
+        run: pip install requests "qrcode[pil]" pyinstaller
 
-      - name: Build EXE
-        run: pyinstaller --onefile --console --name BiliLiveLike --clean bili_like_api.py
+      # 图形界面版 (主程序, 双击直接开窗口)
+      - name: Build GUI EXE
+        run: pyinstaller --onefile --noconsole --name BiliLiveLike --clean bili_like_gui.py
+
+      # 控制台版 (备用, 喜欢命令行的用这个)
+      - name: Build CLI EXE
+        run: pyinstaller --onefile --console --name BiliLiveLike-cli --clean bili_like_api.py
 
       - name: Upload Artifact (每次构建都可在 Actions 页面下载)
         uses: actions/upload-artifact@v4
         with:
           name: BiliLiveLike-windows-x64
-          path: dist/BiliLiveLike.exe
+          path: |
+            dist/BiliLiveLike.exe
+            dist/BiliLiveLike-cli.exe
           if-no-files-found: error
 
       - name: Create GitHub Release (仅打 tag 时)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/BiliLiveLike.exe
+          files: |
+            dist/BiliLiveLike.exe
+            dist/BiliLiveLike-cli.exe
           generate_release_notes: true
