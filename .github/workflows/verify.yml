@@ -39,6 +39,17 @@ jobs:
         shell: bash
         run: python -m unittest discover -s tests -v 2>&1 | tee -a "$RUNNER_TEMP/check.log"
 
+      # 真实故障回归: Windows runner 的 stdout 是 cp1252 管道, 任务线程里打印中文
+      # 会抛 UnicodeEncodeError, 被 except 捕获后又在异常处理里打印 -> 线程死亡 ->
+      # 任务被标记为 error(8 个测试同时挂)。本地之所以没暴露, 是因为本机是 UTF-8/cp936。
+      # 这里只钉死"非 UTF-8", 复现用户最真实的场景(管道/重定向/英文区域)。
+      # 至于"连编码都改不了"的极端情况, 由 tests/test_stdio.py 精确覆盖。
+      - name: Tests under non-UTF-8 stdout (编码回归)
+        shell: bash
+        env:
+          PYTHONIOENCODING: cp1252
+        run: python -m unittest discover -s tests 2>&1 | tee -a "$RUNNER_TEMP/check.log"
+
       - name: Report errors on failure
         shell: bash
         if: failure()

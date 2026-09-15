@@ -410,14 +410,16 @@ def main():
     host = "0.0.0.0" if args.lan else "127.0.0.1"
     srv = ThreadingHTTPServer((host, args.port), build_handler(html_path))
     url = f"http://127.0.0.1:{args.port}"
-    print("=" * 56)
-    print("  B站直播自动点赞 · 网页界面版")
-    print("=" * 56)
-    print(f"  本机访问: {url}")
+    # 用核心里的编码安全 print: stdout 被重定向/cp1252 区域时, 中文横幅不能把服务打崩
+    p = core._safe_print
+    p("=" * 56)
+    p("  B站直播自动点赞 · 网页界面版")
+    p("=" * 56)
+    p(f"  本机访问: {url}")
     if args.lan:
-        print(f"  手机访问: http://{local_ip()}:{args.port}   (需同一 WiFi)")
-    print("  按 Ctrl+C 退出")
-    print("-" * 56)
+        p(f"  手机访问: http://{local_ip()}:{args.port}   (需同一 WiFi)")
+    p("  按 Ctrl+C 退出")
+    p("-" * 56)
 
     threading.Thread(target=lambda: (time.sleep(0.5), refresh_account(),
                                      ST.add_log("[init] 服务已启动")),
@@ -425,7 +427,7 @@ def main():
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
-        print("\n[bye] 已退出")
+        p("\n[bye] 已退出")
 
 
 if __name__ == "__main__":

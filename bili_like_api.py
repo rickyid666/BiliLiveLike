@@ -37,6 +37,67 @@ try:
 except ImportError:
     qrcode = None
 
+
+# ---------------------------------------------------------------------------
+# 标准输出编码适配 (真实故障修复)
+#
+# 背景: Windows 上标准输出被重定向成管道/文件时, 编码可能是 cp1252 / cp936,
+# 此时 print(中文) 会抛 UnicodeEncodeError。后果不是"日志难看", 而是:
+#   任务线程的 log() 抛出 -> 被 run() 的 except 捕获 -> 在异常处理里又调 log()
+#   -> 二次抛出 -> 线程死亡 -> 任务被标记为 error。
+# 所以这里做两层保护:
+#   1) _fix_stdio_encoding(): 进程内把非 UTF-8 的标准输出改成 UTF-8 (管道同样有效)
+#   2) _safe_write(): 无论如何不让写日志的失败冒泡出去
+# ---------------------------------------------------------------------------
+
+def _safe_write(stream, text):
+    """把文本写进流, 绝不抛异常; 返回是否写入成功"""
+    try:
+        stream.write(text)
+        stream.flush()
+        return True
+    except UnicodeEncodeError:
+        pass                     # 交给下面的降级路径
+    except Exception:
+        return False             # 流已关闭/不可写等, 静默放弃
+
+    enc = getattr(stream, "encoding", None) or "ascii"
+    for candidate in (text.encode(enc, "backslashreplace").decode(enc, "replace"),
+                      text.encode("ascii", "backslashreplace").decode("ascii")):
+        try:
+            stream.write(candidate)
+            stream.flush()
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def _safe_print(text=""):
+    """编码安全的 print: 日志不该有能力搞崩业务"""
+    _safe_write(sys.stdout, str(text) + "\n")
+
+
+def _fix_stdio_encoding():
+    """把非 UTF-8 的标准输出改为 UTF-8; 可用 BLL_NO_STDIO_SETUP=1 关闭
+
+    只在当前编码不是 UTF-8 时动手, 避免作为库被 import 时擅自改宿主环境。
+    """
+    if os.environ.get("BLL_NO_STDIO_SETUP") == "1":
+        return
+    for stream in (sys.stdout, sys.stderr):
+        enc = (getattr(stream, "encoding", None) or "").lower().replace("-", "")
+        if enc in ("utf8", "utf8mb4"):
+            continue
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
+_fix_stdio_encoding()
+
+
 def _app_dir():
     """兼容 PyInstaller 打包: exe 运行时文件要放在 exe 旁边, 而不是临时解压目录"""
     if getattr(sys, "frozen", False):
@@ -102,11 +163,11 @@ def print_qr_console(qr):
     """GBK/UTF-8 控制台都安全的二维码打印 (只用全块字符, 反色适配深色终端)"""
     try:
         for row in qr.get_matrix():
-            print("".join("  " if v else "██" for v in row))
+            _safe_print("".join("  " if v else "██" for v in row))
     except UnicodeEncodeError:
         # 极端情况: 控制台连 █ 都打不出来, 退化为纯 ASCII
         for row in qr.get_matrix():
-            print("".join("  " if v else "##" for v in row))
+            _safe_print("".join("  " if v else "##" for v in row))
 
 
 class RequestGate:
@@ -174,7 +235,7 @@ class RoomTask:
         }
 
     def log(self, text):
-        print(f"[task {self.short}] {text}")
+        _safe_print(f"[task {self.short}] {text}")
 
     def start(self):
         if self.thread and self.thread.is_alive():
@@ -277,8 +338,9 @@ class RoomTask:
                     self.log(f"已达单场点赞上限({limit})，任务完成")
                     return
         except Exception as e:
-            self.state, self.msg = "error", f"异常: {e}"
-            self.log(f"任务异常: {e}")
+            # 带上异常类型: 之前只写 str(e), 编码类故障看上去像业务异常, 排查时误导过
+            self.state, self.msg = "error", f"{type(e).__name__}: {e}"
+            self.log(f"任务异常: {type(e).__name__}: {e}")
         finally:
             if self.state not in ("done", "error"):
                 self.state, self.msg = "stopped", "已停止"
@@ -449,19 +511,19 @@ class BiliLikeApi:
     # ---------- 登录 ----------
     def login_qr(self):
         if qrcode is None:
-            print("[login] 缺少 qrcode 库, 请先: pip install qrcode  (或用 paste 命令粘贴Cookie)")
+            _safe_print("[login] 缺少 qrcode 库, 请先: pip install qrcode  (或用 paste 命令粘贴Cookie)")
             return False
         r = self.s.get(QR_GENERATE, timeout=10).json()
         if r.get("code") != 0:
-            print("[login] 获取二维码失败:", r)
+            _safe_print("[login] 获取二维码失败:", r)
             return False
         url, key = r["data"]["url"], r["data"]["qrcode_key"]
-        print("[login] 请用 哔哩哔哩手机App 扫描下方二维码登录 (有效期约3分钟):")
+        _safe_print("[login] 请用 哔哩哔哩手机App 扫描下方二维码登录 (有效期约3分钟):")
         qr = qrcode.QRCode(border=1)
         qr.add_data(url)
         qr.make()
         print_qr_console(qr)
-        print("[login] 等待扫码确认...")
+        _safe_print("[login] 等待扫码确认...")
         t0 = time.time()
         while time.time() - t0 < 180:
             p = self.s.get(QR_POLL, params={"qrcode_key": key}, timeout=10).json()
@@ -469,15 +531,15 @@ class BiliLikeApi:
             if code == 0:
                 self._save_cookies()
                 ok, uname = self.logged_in()
-                print(f"[login] 登录成功! 欢迎你, {uname}")
+                _safe_print(f"[login] 登录成功! 欢迎你, {uname}")
                 return True
             elif code == 86038:
-                print("[login] 二维码已过期, 请重新输入 login")
+                _safe_print("[login] 二维码已过期, 请重新输入 login")
                 return False
             elif code == 86090:
-                print("[login] 已扫码, 请在手机上确认...")
+                _safe_print("[login] 已扫码, 请在手机上确认...")
             time.sleep(2)
-        print("[login] 等待超时")
+        _safe_print("[login] 等待超时")
         return False
 
     # ---------- 点赞 ----------
@@ -535,16 +597,16 @@ class BiliLikeApi:
         ok, bad = self.manager.add_many(rooms)
         for t in self.manager.list():
             if t.raw in [normalize_room(r) for r in rooms]:
-                print(f"[task {t.short}] 已加入任务列表({t.state})")
+                _safe_print(f"[task {t.short}] 已加入任务列表({t.state})")
         for r, err in bad:
-            print(f"[task] {r}: {err}")
+            _safe_print(f"[task] {r}: {err}")
         return ok
 
     def start(self, room: str = ""):
         """启动任务: 带房间号=添加并启动该房间; 不带=启动全部已添加的房间"""
         ok, uname = self.logged_in()
         if not ok:
-            print("[task] 未登录! 请先输入 login 扫码 或 paste 粘贴Cookie")
+            _safe_print("[task] 未登录! 请先输入 login 扫码 或 paste 粘贴Cookie")
             return
         self._uid = self.s.cookies.get("DedeUserID", "")
         self._csrf = self.s.cookies.get("bili_jct", "")
@@ -555,26 +617,26 @@ class BiliLikeApi:
             save_config(self.cfg)
             task, err = self.manager.start(target)
             if not task:
-                print(f"[task] {err}")
+                _safe_print(f"[task] {err}")
                 return
-            print(f"[task {task.short}] 已启动")
+            _safe_print(f"[task {task.short}] 已启动")
             return
 
         if not self.manager.list():
-            print("[task] 任务列表是空的, 先 add 房间号 或 go 房间号")
+            _safe_print("[task] 任务列表是空的, 先 add 房间号 或 go 房间号")
             return
         n = self.manager.start_all()
-        print(f"[task] 已启动 {n} 个房间任务"
+        _safe_print(f"[task] 已启动 {n} 个房间任务"
               f"(全局请求间隔 {self.manager.gate.min_gap:g}s, 避免并发特征)")
 
     def stop(self, room: str = ""):
         if room:
             n = self.manager.stop(room)
-            print(f"[task] 正在停止 {normalize_room(room) or room} ..." if n
+            _safe_print(f"[task] 正在停止 {normalize_room(room) or room} ..." if n
                   else f"[task] 没找到房间 {room}")
             return
         n = self.manager.stop()
-        print(f"[task] 正在停止 {n} 个任务 ..." if n else "[task] 当前没有运行中的任务")
+        _safe_print(f"[task] 正在停止 {n} 个任务 ..." if n else "[task] 当前没有运行中的任务")
 
     def remove_room(self, room):
         return self.manager.remove(room)
@@ -584,50 +646,46 @@ class BiliLikeApi:
         likes, clicks = self.manager.totals()
         tasks = self.manager.list()
         active = self.manager.active_count()
-        print(f"[status] 账号: {uname if ok else '未登录'} | "
+        _safe_print(f"[status] 账号: {uname if ok else '未登录'} | "
               f"任务 {len(tasks)} 个(运行中 {active}) | "
               f"已点赞 {likes} ({clicks} 次请求) | "
               f"全局间隔 {self.manager.gate.min_gap:g}s | "
               f"状态: {'运行中' if active else '空闲'}")
         if tasks:
-            print("        房间            状态      已点赞  请求")
+            _safe_print("        房间            状态      已点赞  请求")
             for t in tasks:
-                print(f"        {t.short:<14} {t.msg:<8} {t.likes:>6}  {t.clicks:>4}")
+                _safe_print(f"        {t.short:<14} {t.msg:<8} {t.likes:>6}  {t.clicks:>4}")
 
 
 def _setup_console():
     """Windows 控制台适配: 切 UTF-8 代码页, 防止中文/二维码字符乱码或报错"""
-    if os.name == "nt":
+    if os.name == "nt" and os.environ.get("BLL_NO_STDIO_SETUP") != "1":
         os.system("chcp 65001 >nul")
-    for s in (sys.stdout, sys.stderr):
-        try:
-            s.reconfigure(encoding="utf-8", errors="replace")
-        except Exception:
-            pass
+    _fix_stdio_encoding()
 
 
 def main():
     _setup_console()
     if requests is None:
-        print("[error] 缺少依赖库 requests, 请在命令行执行:")
-        print("        pip install requests qrcode")
+        _safe_print("[error] 缺少依赖库 requests, 请在命令行执行:")
+        _safe_print("        pip install requests qrcode")
         input("按回车退出...")
         return
-    print("=" * 56)
-    print("  B站直播自动点赞 - 纯接口后台版 (无窗口/无鼠标模拟)")
-    print("=" * 56)
+    _safe_print("=" * 56)
+    _safe_print("  B站直播自动点赞 - 纯接口后台版 (无窗口/无鼠标模拟)")
+    _safe_print("=" * 56)
     app = BiliLikeApi()
     ok, uname = app.logged_in()
-    print(f"[init] 登录状态: {uname if ok else '未登录 (先输入 login 或 paste)'}")
-    print()
-    print("命令:")
-    print("  add 房间号 [房间号...]   添加房间任务(可一次多个)")
-    print("  list                     查看任务列表")
-    print("  go [房间号...]           启动(带房间号则先添加再启动; 不带则启动全部)")
-    print("  stop [房间号]            停止某个房间; 不带参数=全部停止")
-    print("  rm 房间号                移除任务")
-    print("  status / login / paste / quit")
-    print("-" * 56)
+    _safe_print(f"[init] 登录状态: {uname if ok else '未登录 (先输入 login 或 paste)'}")
+    _safe_print()
+    _safe_print("命令:")
+    _safe_print("  add 房间号 [房间号...]   添加房间任务(可一次多个)")
+    _safe_print("  list                     查看任务列表")
+    _safe_print("  go [房间号...]           启动(带房间号则先添加再启动; 不带则启动全部)")
+    _safe_print("  stop [房间号]            停止某个房间; 不带参数=全部停止")
+    _safe_print("  rm 房间号                移除任务")
+    _safe_print("  status / login / paste / quit")
+    _safe_print("-" * 56)
     while True:
         try:
             cmd = input(">> ").strip()
@@ -639,14 +697,14 @@ def main():
         elif low == "login":
             app.login_qr()
         elif low == "paste":
-            print("粘贴浏览器里的 Cookie 请求头内容后回车:")
+            _safe_print("粘贴浏览器里的 Cookie 请求头内容后回车:")
             try:
                 raw = input("Cookie> ")
             except EOFError:
                 continue
             n = app.set_cookie_string(raw)
             ok2, uname2 = app.logged_in()
-            print(f"[paste] 已读取 {n} 个字段, 登录状态: {uname2 if ok2 else '无效, 请检查是否复制完整'}")
+            _safe_print(f"[paste] 已读取 {n} 个字段, 登录状态: {uname2 if ok2 else '无效, 请检查是否复制完整'}")
         elif low == "whoami":
             app.status()
         elif low == "go" or low.startswith("go "):
@@ -657,15 +715,15 @@ def main():
         elif low == "add" or low.startswith("add "):
             rooms = cmd[3:].split()
             if not rooms:
-                print("用法: add 房间号 [房间号...]")
+                _safe_print("用法: add 房间号 [房间号...]")
             else:
                 app.add_room(*rooms)
         elif low == "rm" or low.startswith("rm "):
             rooms = cmd[2:].split()
             if not rooms:
-                print("用法: rm 房间号")
+                _safe_print("用法: rm 房间号")
             for r in rooms:
-                print(f"[task] 已移除 {r}" if app.remove_room(r) else f"[task] 没找到 {r}")
+                _safe_print(f"[task] 已移除 {r}" if app.remove_room(r) else f"[task] 没找到 {r}")
         elif low == "list":
             app.status()
         elif low == "stop" or low.startswith("stop "):
@@ -673,9 +731,9 @@ def main():
         elif low == "status":
             app.status()
         else:
-            print("未知命令. 可用: login / paste / go [房间号] / stop / status / quit")
+            _safe_print("未知命令. 可用: login / paste / go [房间号] / stop / status / quit")
     app.stop()
-    print("[bye] 已退出")
+    _safe_print("[bye] 已退出")
 
 
 if __name__ == "__main__":
@@ -684,7 +742,7 @@ if __name__ == "__main__":
     except Exception:
         import traceback
         traceback.print_exc()
-        print("[error] 发生未预期的错误 (见上方信息), 可截图反馈")
+        _safe_print("[error] 发生未预期的错误 (见上方信息), 可截图反馈")
         try:
             input("按回车退出...")
         except Exception:
