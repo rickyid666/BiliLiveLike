@@ -31,6 +31,7 @@ jobs:
       - name: Install dependencies
         run: pip install requests "qrcode[pil]"
       - name: Checks (安全扫描 + 自动化测试)
+        shell: bash
         run: |
           set -o pipefail
           {
@@ -40,6 +41,7 @@ jobs:
             python -m unittest discover -s tests
           } 2>&1 | tee "$RUNNER_TEMP/check.log"
       - name: Report errors on failure
+        shell: bash
         if: failure()
         continue-on-error: true
         env:
@@ -61,11 +63,13 @@ jobs:
 
       # 直接用 runner 预装的 Android SDK (setup-android 这个 action 已失效)
       - name: Show Android SDK
+        shell: bash
         run: |
           echo "ANDROID_HOME=$ANDROID_HOME"
           ls "$ANDROID_HOME/platforms" || true
 
       - name: Accept SDK licenses
+        shell: bash
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
 
       - name: Setup Gradle
@@ -74,10 +78,12 @@ jobs:
           gradle-version: "8.7"
 
       - name: Write local.properties
+        shell: bash
         run: echo "sdk.dir=$ANDROID_HOME" > android/local.properties
 
       # 固定签名 (可选): 仓库配置了 Secret 就用 release 签名, 否则退回 debug
       - name: Prepare signing
+        shell: bash
         env:
           KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
@@ -90,6 +96,7 @@ jobs:
           echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
 
       - name: Build APK
+        shell: bash
         working-directory: android
         env:
           ANDROID_KEYSTORE_PATH: ${{ env.ANDROID_KEYSTORE_PATH }}

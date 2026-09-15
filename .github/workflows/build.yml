@@ -26,6 +26,7 @@ jobs:
       - name: Install dependencies
         run: pip install requests "qrcode[pil]"
       - name: Checks (安全扫描 + 自动化测试)
+        shell: bash
         run: |
           set -o pipefail
           {
@@ -35,6 +36,7 @@ jobs:
             python -m unittest discover -s tests
           } 2>&1 | tee "$RUNNER_TEMP/check.log"
       - name: Report errors on failure
+        shell: bash
         if: failure()
         continue-on-error: true
         env:

@@ -32,12 +32,15 @@ jobs:
         run: pip install requests "qrcode[pil]"
 
       - name: Security scan (凭据/密钥/私人信息)
+        shell: bash
         run: python tools/security_scan.py --all 2>&1 | tee "$RUNNER_TEMP/check.log"
 
       - name: Tests (调度器 / 网页版 / 命令行 / 扫描器)
+        shell: bash
         run: python -m unittest discover -s tests -v 2>&1 | tee -a "$RUNNER_TEMP/check.log"
 
       - name: Report errors on failure
+        shell: bash
         if: failure()
         continue-on-error: true
         env:
