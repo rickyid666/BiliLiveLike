@@ -21,6 +21,14 @@ import threading
 import time
 import unittest
 
+try:
+    import requests as _requests_probe  # noqa: F401
+    HAS_DEPS = True
+except ImportError:                     # 裸 python: 缺依赖时优雅跳过, CI 里一定会装
+    HAS_DEPS = False
+NEED_DEPS = unittest.skipUnless(HAS_DEPS, "需要 requests（pip install requests）")
+
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
@@ -86,6 +94,7 @@ def wait_until(pred, timeout=3.0, step=0.02):
     return False
 
 
+@NEED_DEPS
 class SchedulerTest(unittest.TestCase):
 
     def make_app(self, **cfg):

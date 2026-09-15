@@ -7,6 +7,14 @@ import sys
 import tempfile
 import unittest
 
+try:
+    import requests as _requests_probe  # noqa: F401
+    HAS_DEPS = True
+except ImportError:                     # 裸 python: 缺依赖时优雅跳过, CI 里一定会装
+    HAS_DEPS = False
+NEED_DEPS = unittest.skipUnless(HAS_DEPS, "需要 requests（pip install requests）")
+
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -18,6 +26,7 @@ def run_cli(tmp, commands, timeout=90):
     return proc
 
 
+@NEED_DEPS
 class CliTest(unittest.TestCase):
 
     @classmethod

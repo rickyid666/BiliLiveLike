@@ -1,13 +1,24 @@
 #!/bin/sh
 # 推送前门禁 —— 发现敏感内容或测试不过就拦住
-#   git push --no-verify  可跳过(不推荐)
-#   BLL_SKIP_TESTS=1 git push  只跑安全扫描
+#   git push --no-verify        跳过全部检查(不推荐)
+#   BLL_SKIP_TESTS=1 git push   只跑安全扫描, 跳过测试
 ROOT=$(git rev-parse --show-toplevel) || exit 0
 cd "$ROOT" || exit 0
 
-PY=python
-command -v python >/dev/null 2>&1 || PY=py
-command -v "$PY" >/dev/null 2>&1 || { echo "[pre-push] 未找到 python, 跳过检查"; exit 0; }
+# 挑一个"能用"的 python: 优先带 requests 的, 否则退而求其次
+find_python() {
+  for cand in python python3 py; do
+    if command -v "$cand" >/dev/null 2>&1 && "$cand" -c "import requests" >/dev/null 2>&1; then
+      echo "$cand"; return 0
+    fi
+  done
+  for cand in python python3 py; do
+    if command -v "$cand" >/dev/null 2>&1; then echo "$cand"; return 0; fi
+  done
+  return 1
+}
+
+PY=$(find_python) || { echo "[pre-push] 未找到 python, 跳过检查"; exit 0; }
 
 echo "[pre-push] 安全扫描…"
 if ! "$PY" tools/security_scan.py; then
@@ -17,13 +28,24 @@ if ! "$PY" tools/security_scan.py; then
   exit 1
 fi
 
-if [ "$BLL_SKIP_TESTS" != "1" ]; then
-  echo "[pre-push] 运行自动化测试…"
-  if ! "$PY" -m unittest discover -s tests -q; then
-    echo ""
-    echo "[pre-push] ✗ 测试未通过, 已阻止推送 (只跳过测试: BLL_SKIP_TESTS=1 git push)"
-    exit 1
-  fi
+if [ "$BLL_SKIP_TESTS" = "1" ]; then
+  echo "[pre-push] ✓ 安全扫描通过 (已按 BLL_SKIP_TESTS=1 跳过测试)"
+  exit 0
+fi
+
+if ! "$PY" -c "import requests" >/dev/null 2>&1; then
+  echo "[pre-push] ⚠ 当前 python ($PY) 缺少 requests, 跳过测试"
+  echo "           本地想完整跑: pip install requests \"qrcode[pil]\" (CI 一定会跑)"
+  echo "[pre-push] ✓ 安全扫描通过"
+  exit 0
+fi
+
+echo "[pre-push] 运行自动化测试…"
+if ! "$PY" -m unittest discover -s tests -q; then
+  echo ""
+  echo "[pre-push] ✗ 测试未通过, 已阻止推送"
+  echo "           只跳过测试: BLL_SKIP_TESTS=1 git push"
+  exit 1
 fi
 
 echo "[pre-push] ✓ 通过"
