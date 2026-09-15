@@ -68,17 +68,64 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
+          set -o pipefail
           if [ -n "$ANDROID_KEYSTORE_PATH" ] && [ -n "$ANDROID_KEYSTORE_PASSWORD" ]; then
             echo "==> 使用固定签名构建 release 包"
-            gradle assembleRelease --no-daemon --stacktrace
+            gradle assembleRelease --no-daemon --stacktrace 2>&1 | tee "$RUNNER_TEMP/build.log"
             APK=app/build/outputs/apk/release/app-release.apk
           else
             echo "==> 未配置签名, 回退 debug 包"
-            gradle assembleDebug --no-daemon --stacktrace
+            gradle assembleDebug --no-daemon --stacktrace 2>&1 | tee "$RUNNER_TEMP/build.log"
             APK=app/build/outputs/apk/debug/app-debug.apk
           fi
           cp "$APK" ../BiliLiveLike.apk
           ls -l ../BiliLiveLike.apk
+
+      # 构建失败时把关键错误行贴成提交评论 (便于无人值守排查)
+      - name: Report build errors
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cat > "$RUNNER_TEMP/report.py" <<'PYEOF'
+          import json, os, re, urllib.request
+
+          log_path = os.path.join(os.environ.get("RUNNER_TEMP", "/tmp"), "build.log")
+          lines = []
+          if os.path.exists(log_path):
+              with open(log_path, encoding="utf-8", errors="replace") as f:
+                  lines = f.read().splitlines()
+
+          keep = []
+          pat = re.compile(r"(error:|error;|FAILURE:|What went wrong|Caused by|Execution failed|> Task .*FAILED|\.java:\d+|symbol|BUILD FAILED)")
+          for ln in lines:
+              if pat.search(ln):
+                  keep.append(ln.rstrip())
+
+          if not keep:
+              keep = [l.rstrip() for l in lines[-40:]]
+          text = "\n".join(keep[-60:])[:6500] or "(构建日志为空)"
+
+          body = {"body": "APK 构建失败，关键日志：\n\n```\n" + text + "\n```"}
+          repo = os.environ["GITHUB_REPOSITORY"]
+          sha = os.environ["GITHUB_SHA"]
+          req = urllib.request.Request(
+              f"https://api.github.com/repos/{repo}/commits/{sha}/comments",
+              data=json.dumps(body).encode(),
+              headers={
+                  "Authorization": "Bearer " + os.environ["GH_TOKEN"],
+                  "Accept": "application/vnd.github+json",
+                  "Content-Type": "application/json",
+              },
+              method="POST",
+          )
+          try:
+              with urllib.request.urlopen(req, timeout=30) as r:
+                  print("comment posted:", r.status)
+          except Exception as e:
+              print("post failed:", e)
+          PYEOF
+          python3 "$RUNNER_TEMP/report.py"
 
       - name: Upload Artifact (Actions 页面可下载)
         uses: actions/upload-artifact@v4
