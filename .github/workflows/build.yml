@@ -35,6 +35,10 @@ jobs:
       - name: Build CLI EXE
         run: pyinstaller --onefile --console --name BiliLiveLike-cli --clean bili_like_api.py
 
+      # 网页界面版 (本地起服务, 浏览器/手机访问)
+      - name: Build Web EXE
+        run: pyinstaller --onefile --console --name BiliLiveLike-web --add-data "web;web" --clean web_server.py
+
       - name: Upload Artifact (每次构建都可在 Actions 页面下载)
         uses: actions/upload-artifact@v4
         with:
@@ -42,6 +46,7 @@ jobs:
           path: |
             dist/BiliLiveLike.exe
             dist/BiliLiveLike-cli.exe
+            dist/BiliLiveLike-web.exe
           if-no-files-found: error
 
       - name: Create GitHub Release (仅打 tag 时)
@@ -51,4 +56,5 @@ jobs:
           files: |
             dist/BiliLiveLike.exe
             dist/BiliLiveLike-cli.exe
+            dist/BiliLiveLike-web.exe
           generate_release_notes: true

@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#FB7299">
+<title>BiliLiveLike · B站直播自动点赞</title>
+<style>
+/* ============================================================
+   设计令牌: 色彩 / 字体 / 间距 / 圆角 / 阴影
+   ============================================================ */
+:root{
+  --brand:#FB7299; --brand-hover:#F0577F; --brand-press:#DC4468;
+  --brand-soft:#FFF0F4; --brand-soft-hover:#FFE3EB; --brand-ink:#C7305A;
+  --brand-grad:linear-gradient(135deg,#FB7299 0%,#F0577F 100%);
+
+  --bg:#F1F3F5; --surface:#FFFFFF; --surface-2:#F7F8FA; --surface-3:#EEF0F3;
+  --border:#E3E6EA; --border-strong:#D2D6DB;
+
+  --text:#1F2329; --text-2:#5B6169; --text-3:#8A9099;
+  --ok:#2FA84F; --ok-soft:#EAF7EE;
+  --warn:#C77A0A; --warn-soft:#FFF6E8;
+  --err:#D93B40; --err-soft:#FDECEE;
+  --console:#15171C; --console-fg:#D5D8DD;
+  --c-ok:#5FD08A; --c-err:#FF7B7F; --c-warn:#F0C060; --c-dim:#7B838E;
+
+  --r-sm:8px; --r-md:12px; --r-lg:16px; --r-full:999px;
+  --sh-1:0 1px 2px rgba(16,24,40,.05);
+  --sh-2:0 2px 4px rgba(16,24,40,.04),0 12px 28px -16px rgba(16,24,40,.18);
+
+  --s-1:4px; --s-2:8px; --s-3:12px; --s-4:16px; --s-5:24px; --s-6:32px;
+  --dur:.18s;
+  --font:system-ui,-apple-system,"Segoe UI","Microsoft YaHei UI","PingFang SC","Hiragino Sans GB",sans-serif;
+  --mono:"JetBrains Mono",Consolas,"SF Mono",Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#0F1115; --surface:#171A20; --surface-2:#1E222A; --surface-3:#252A33;
+    --border:#2A2F3A; --border-strong:#39404D;
+    --text:#E8EAEF; --text-2:#A8B0BB; --text-3:#79828F;
+    --brand-soft:#2A1B22; --brand-soft-hover:#38222C; --brand-ink:#FFA8C0;
+    --ok:#4FC97A; --ok-soft:#16281C;
+    --warn:#E0A63F; --warn-soft:#2A2317;
+    --err:#FF7B7F; --err-soft:#2C1A1C;
+    --console:#0B0D11; --console-fg:#CED3DA;
+    --sh-2:0 2px 8px rgba(0,0,0,.4),0 16px 32px -20px rgba(0,0,0,.6);
+  }
+}
+
+*,*::before,*::after{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  font-family:var(--font); background:var(--bg); color:var(--text);
+  font-size:14px; line-height:1.6; -webkit-font-smoothing:antialiased;
+  min-height:100dvh; display:flex; flex-direction:column;
+}
+h1,h2,h3,p{margin:0}
+button,input{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--brand);outline-offset:2px;border-radius:var(--r-sm)}
+
+/* ============================================================
+   顶部品牌栏
+   ============================================================ */
+.app-header{background:var(--brand-grad);color:#fff;flex:0 0 auto}
+.app-header__inner{
+  max-width:1180px;margin:0 auto;padding:var(--s-4) var(--s-5);
+  display:flex;align-items:center;gap:var(--s-4);flex-wrap:wrap;
+}
+.brand{display:flex;align-items:center;gap:var(--s-3);min-width:0}
+.brand__mark{
+  width:40px;height:40px;flex:0 0 auto;border-radius:var(--r-md);
+  background:rgba(255,255,255,.18);backdrop-filter:blur(4px);
+  display:grid;place-items:center;font-size:20px;
+}
+.brand__text{min-width:0}
+.brand__title{font-size:17px;font-weight:700;letter-spacing:.2px}
+.brand__sub{font-size:12px;color:rgba(255,255,255,.82)}
+.header-actions{margin-left:auto;display:flex;gap:var(--s-2);flex-wrap:wrap}
+
+/* 账号状态条 */
+.account-bar{background:rgba(0,0,0,.12);flex:0 0 auto}
+.account-bar__inner{
+  max-width:1180px;margin:0 auto;padding:var(--s-2) var(--s-5);
+  display:flex;align-items:center;gap:var(--s-2);color:#fff;font-size:13px;
+  flex-wrap:wrap;
+}
+.dot{width:8px;height:8px;border-radius:var(--r-full);background:rgba(255,255,255,.55);flex:0 0 auto}
+.dot--on{background:#A9F0C0;box-shadow:0 0 0 3px rgba(169,240,192,.22)}
+.account-bar__hint{margin-left:auto;font-size:12px;color:rgba(255,255,255,.72)}
+
+/* ============================================================
+   布局: 桌面双栏 / 移动单栏
+   ============================================================ */
+.layout{
+  flex:1 1 auto;width:100%;max-width:1180px;margin:0 auto;
+  padding:var(--s-5);display:grid;gap:var(--s-4);
+  grid-template-columns:minmax(360px,420px) minmax(0,1fr);
+  align-items:stretch;min-height:0;
+}
+/* 日志卡片撑满可用高度, 避免桌面端下方大片空白 */
+.card--grow{display:flex;flex-direction:column;min-height:0}
+.card--grow .card__body{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+.card--grow .console{flex:1 1 auto;height:auto;min-height:180px;max-height:none}
+@media (max-width:900px){
+  .layout{grid-template-columns:minmax(0,1fr);padding:var(--s-4) var(--s-3)}
+  .card--grow .console{height:clamp(180px,34vh,320px);flex:0 0 auto}
+}
+@media (max-width:520px){
+  .app-header__inner{padding:var(--s-3) var(--s-4)}
+  .account-bar__inner{padding:var(--s-2) var(--s-4)}
+  .header-actions{width:100%;margin-left:0}
+  .account-bar__hint,.status-bar__hint{display:none}
+}
+
+/* ============================================================
+   卡片
+   ============================================================ */
+.card{
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);
+  box-shadow:var(--sh-2);overflow:hidden;
+}
+.card__head{
+  display:flex;align-items:center;gap:var(--s-2);
+  padding:var(--s-4) var(--s-4) var(--s-3);
+}
+.card__title{font-size:15px;font-weight:700}
+.card__hint{margin-left:auto;font-size:12px;color:var(--text-3)}
+.card__body{padding:0 var(--s-4) var(--s-4)}
+.card__divider{height:1px;background:var(--border);margin:0 var(--s-4)}
+
+/* ============================================================
+   表单
+   ============================================================ */
+.field{display:flex;flex-direction:column;gap:var(--s-2);margin-bottom:var(--s-4)}
+.field__label{font-size:12.5px;font-weight:600;color:var(--text-2)}
+.field__row{display:flex;gap:var(--s-2);flex-wrap:wrap}
+
+.input{
+  width:100%;min-height:44px;padding:var(--s-3);
+  background:var(--surface-2);border:1px solid var(--border-strong);
+  border-radius:var(--r-md);color:var(--text);
+  transition:border-color var(--dur),background var(--dur),box-shadow var(--dur);
+}
+.input::placeholder{color:var(--text-3)}
+.input:hover{border-color:#C0C5CC}
+.input:focus{
+  outline:none;border-color:var(--brand);background:var(--surface);
+  box-shadow:0 0 0 3px rgba(251,114,153,.18);
+}
+.input:disabled{background:var(--surface-3);color:var(--text-3);cursor:not-allowed}
+.input--sm{min-height:40px;padding:var(--s-2) var(--s-3);text-align:center}
+
+.grid-2{display:grid;gap:var(--s-3);grid-template-columns:repeat(2,minmax(0,1fr))}
+@media (max-width:520px){.grid-2{grid-template-columns:minmax(0,1fr)}}
+
+.param-well{
+  background:var(--surface-2);border:1px solid var(--border);
+  border-radius:var(--r-md);padding:var(--s-3);
+}
+.param-row{display:flex;align-items:center;gap:var(--s-2);margin-bottom:var(--s-3)}
+.param-row:last-child{margin-bottom:0}
+.param-row__name{flex:0 0 76px;font-size:12.5px;color:var(--text-2)}
+.param-row__unit{font-size:12px;color:var(--text-3)}
+.param-row__sep{color:var(--text-3);font-size:12px}
+.param-row .input{flex:1 1 0;min-width:56px}
+/* 单值行让输入框与范围行等宽, 保持纵向对齐 */
+.param-row--single .input{flex:0 0 calc(50% - 30px)}
+
+/* ============================================================
+   按钮 (默认/悬停/按下/聚焦/禁用)
+   ============================================================ */
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:var(--s-2);
+  min-height:44px;padding:0 var(--s-4);border-radius:var(--r-md);
+  border:1px solid transparent;background:transparent;cursor:pointer;
+  font-size:14px;font-weight:600;white-space:nowrap;
+  transition:background var(--dur),color var(--dur),border-color var(--dur),
+             box-shadow var(--dur),transform var(--dur);
+}
+.btn:active{transform:translateY(1px)}
+.btn:disabled{cursor:not-allowed;transform:none}
+
+.btn--primary{background:var(--brand);color:#fff;box-shadow:0 6px 16px -10px rgba(251,114,153,.9)}
+.btn--primary:hover:not(:disabled){background:var(--brand-hover)}
+.btn--primary:active:not(:disabled){background:var(--brand-press)}
+.btn--primary:disabled{background:var(--surface-3);color:var(--text-3);box-shadow:none}
+
+.btn--danger{background:var(--err-soft);color:var(--err)}
+.btn--danger:hover:not(:disabled){background:var(--err-soft);filter:brightness(.96)}
+.btn--danger:disabled{background:var(--surface-3);color:var(--text-3);filter:none}
+
+.btn--soft{background:rgba(255,255,255,.92);color:var(--brand-ink);border-color:rgba(255,255,255,.6)}
+.btn--soft:hover:not(:disabled){background:#fff}
+.btn--soft:disabled{opacity:.6;cursor:not-allowed}
+
+.btn--ghost{background:var(--surface-2);color:var(--text-2);border-color:var(--border)}
+.btn--ghost:hover:not(:disabled){background:var(--surface-3);color:var(--text)}
+.btn--ghost:disabled{color:var(--text-3);cursor:not-allowed}
+
+.btn--block{width:100%}
+.btn--sm{min-height:36px;font-size:13px;padding:0 var(--s-3)}
+
+/* ============================================================
+   控制台 / 日志
+   ============================================================ */
+.console{
+  background:var(--console);border-radius:var(--r-md);
+  padding:var(--s-3);height:clamp(200px,42vh,460px);overflow:auto;
+  font-family:var(--mono);font-size:12.5px;line-height:1.7;color:var(--console-fg);
+  overscroll-behavior:contain;
+}
+@media (max-width:900px){.console{height:clamp(180px,34vh,320px)}}
+.console__line{white-space:pre-wrap;word-break:break-word}
+.console__line--ok{color:var(--c-ok)}
+.console__line--err{color:var(--c-err)}
+.console__line--warn{color:var(--c-warn)}
+.console__line--dim{color:var(--c-dim)}
+.console__empty{color:var(--c-dim)}
+
+/* ============================================================
+   底部状态栏
+   ============================================================ */
+.status-bar{
+  position:sticky;bottom:0;background:var(--surface);
+  border-top:1px solid var(--border);flex:0 0 auto;z-index:5;
+}
+.status-bar__inner{
+  max-width:1180px;margin:0 auto;padding:var(--s-3) var(--s-5);
+  display:flex;align-items:center;gap:var(--s-3);flex-wrap:wrap;font-size:13px;
+}
+@media (max-width:520px){.status-bar__inner{padding:var(--s-3) var(--s-4)}}
+.metric{display:inline-flex;align-items:center;gap:var(--s-2);color:var(--text-2)}
+.metric[hidden]{display:none}
+.metric b{color:var(--text);font-variant-numeric:tabular-nums}
+.status-bar__hint{margin-left:auto;color:var(--text-3);font-size:12px}
+.state-pill{
+  display:inline-flex;align-items:center;gap:6px;padding:2px 10px;
+  border-radius:var(--r-full);background:var(--surface-2);
+  border:1px solid var(--border);font-weight:600;
+}
+.state-pill--on{background:var(--ok-soft);border-color:transparent;color:var(--ok)}
+
+/* ============================================================
+   弹窗 / 提示
+   ============================================================ */
+.modal{
+  position:fixed;inset:0;background:rgba(16,19,24,.5);backdrop-filter:blur(2px);
+  display:none;align-items:center;justify-content:center;padding:var(--s-4);z-index:50;
+}
+.modal.is-open{display:flex}
+.modal__panel{
+  background:var(--surface);border-radius:var(--r-lg);width:min(460px,100%);
+  max-height:90dvh;overflow:auto;box-shadow:0 24px 60px -24px rgba(0,0,0,.45);
+}
+.modal__head{
+  padding:var(--s-4);border-bottom:1px solid var(--border);
+  display:flex;align-items:center;gap:var(--s-2);
+}
+.modal__title{font-size:15px;font-weight:700}
+.modal__close{
+  margin-left:auto;width:32px;height:32px;border-radius:var(--r-sm);
+  border:none;background:var(--surface-2);color:var(--text-2);cursor:pointer;
+  font-size:16px;line-height:1;
+}
+.modal__close:hover{background:var(--surface-3);color:var(--text)}
+.modal__body{padding:var(--s-4)}
+.modal__foot{padding:0 var(--s-4) var(--s-4);display:flex;gap:var(--s-2);justify-content:flex-end}
+.qr-wrap{display:grid;place-items:center;gap:var(--s-3)}
+.qr-box{
+  width:248px;height:248px;border-radius:var(--r-md);background:var(--surface-2);
+  border:1px solid var(--border);display:grid;place-items:center;overflow:hidden;
+}
+.qr-box img{display:block;width:240px;height:240px;image-rendering:pixelated}
+.qr-hint{font-size:13px;color:var(--text-2);text-align:center}
+.qr-hint--warn{color:var(--warn);font-weight:600}
+.qr-hint--ok{color:var(--ok);font-weight:600}
+textarea.input{min-height:132px;resize:vertical;font-family:var(--mono);font-size:12.5px}
+
+.toast{
+  position:fixed;left:50%;bottom:calc(var(--s-5) + env(safe-area-inset-bottom));
+  transform:translate(-50%,20px);opacity:0;pointer-events:none;
+  background:var(--text);color:var(--bg);padding:var(--s-3) var(--s-4);
+  border-radius:var(--r-full);font-size:13px;box-shadow:var(--sh-2);
+  transition:opacity var(--dur),transform var(--dur);z-index:80;max-width:88vw;
+}
+.toast.is-show{opacity:1;transform:translate(-50%,0)}
+.toast--err{background:var(--err);color:#fff}
+.toast--ok{background:var(--ok);color:#fff}
+
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+</style>
+</head>
+<body>
+
+<header class="app-header">
+  <div class="app-header__inner">
+    <div class="brand">
+      <div class="brand__mark" aria-hidden="true">👍</div>
+      <div class="brand__text">
+        <h1 class="brand__title">BiliLiveLike</h1>
+        <p class="brand__sub">直播间自动点赞 · 纯接口后台运行</p>
+      </div>
+    </div>
+    <div class="header-actions">
+      <button class="btn btn--soft btn--sm" id="btnQr">扫码登录</button>
+      <button class="btn btn--soft btn--sm" id="btnCookie">粘贴 Cookie</button>
+    </div>
+  </div>
+</header>
+
+<div class="account-bar">
+  <div class="account-bar__inner">
+    <span class="dot" id="accDot"></span>
+    <span id="accText">正在检查登录状态…</span>
+    <span class="account-bar__hint">点赞走的接口与手动双击点赞一致</span>
+  </div>
+</div>
+
+<main class="layout">
+  <!-- 左栏: 控制 -->
+  <div style="display:grid;gap:var(--s-4);align-content:start">
+    <section class="card">
+      <div class="card__head">
+        <h2 class="card__title">直播间</h2>
+        <span class="card__hint" id="roomHint"></span>
+      </div>
+      <div class="card__divider"></div>
+      <div class="card__body" style="padding-top:var(--s-4)">
+        <div class="field">
+          <label class="field__label" for="room">房间号 / 直播间链接</label>
+          <input class="input" id="room" inputmode="numeric" placeholder="例如 1796290755">
+        </div>
+        <div class="grid-2">
+          <button class="btn btn--primary btn--block" id="btnStart">开始点赞</button>
+          <button class="btn btn--danger btn--block" id="btnStop" disabled>停止</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card__head">
+        <h2 class="card__title">运行参数</h2>
+        <span class="card__hint">随机节奏，间隔越大越稳妥</span>
+      </div>
+      <div class="card__divider"></div>
+      <div class="card__body" style="padding-top:var(--s-4)">
+        <div class="param-well">
+          <div class="param-row">
+            <span class="param-row__name">请求间隔</span>
+            <input class="input input--sm" id="ivMin" inputmode="decimal" value="5">
+            <span class="param-row__sep">~</span>
+            <input class="input input--sm" id="ivMax" inputmode="decimal" value="8">
+            <span class="param-row__unit">秒</span>
+          </div>
+          <div class="param-row">
+            <span class="param-row__name">每次连击</span>
+            <input class="input input--sm" id="ckMin" inputmode="numeric" value="10">
+            <span class="param-row__sep">~</span>
+            <input class="input input--sm" id="ckMax" inputmode="numeric" value="20">
+            <span class="param-row__unit">赞</span>
+          </div>
+          <div class="param-row param-row--single">
+            <span class="param-row__name">单场上限</span>
+            <input class="input input--sm" id="maxLikes" inputmode="numeric" value="1000">
+            <span class="param-row__unit">赞</span>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- 右栏: 日志 -->
+  <section class="card card--grow">
+    <div class="card__head">
+      <h2 class="card__title">运行日志</h2>
+      <span class="card__hint">实时输出</span>
+    </div>
+    <div class="card__divider"></div>
+    <div class="card__body" style="padding-top:var(--s-4)">
+      <div class="console" id="console" role="log" aria-live="polite">
+        <div class="console__line console__empty">等待启动…</div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="status-bar">
+  <div class="status-bar__inner">
+    <span class="state-pill" id="statePill"><span class="dot" id="stateDot"></span><span id="stateText">空闲</span></span>
+    <span class="metric">已点赞 <b id="mLikes">0</b></span>
+    <span class="metric">请求 <b id="mClicks">0</b> 次</span>
+    <span class="metric" id="mDurWrap" hidden>已运行 <b id="mDur">0</b> 秒</span>
+    <span class="status-bar__hint">主播开播时点赞才有效</span>
+  </div>
+</footer>
+
+<!-- 扫码登录 -->
+<div class="modal" id="qrModal" role="dialog" aria-modal="true" aria-labelledby="qrTitle">
+  <div class="modal__panel">
+    <div class="modal__head">
+      <span class="modal__title" id="qrTitle">扫码登录</span>
+      <button class="modal__close" data-close="qrModal" aria-label="关闭">✕</button>
+    </div>
+    <div class="modal__body">
+      <div class="qr-wrap">
+        <div class="qr-box" id="qrBox"><span class="console__empty" style="color:var(--text-3);font-size:13px">正在获取二维码…</span></div>
+        <p class="qr-hint" id="qrHint">用 哔哩哔哩 App 扫描二维码</p>
+        <p class="qr-hint" style="color:var(--text-3);font-size:12px">二维码有效期约 3 分钟</p>
+      </div>
+    </div>
+    <div class="modal__foot">
+      <button class="btn btn--ghost btn--sm" id="btnQrRefresh">重新获取</button>
+    </div>
+  </div>
+</div>
+
+<!-- 粘贴 Cookie -->
+<div class="modal" id="cookieModal" role="dialog" aria-modal="true" aria-labelledby="ckTitle">
+  <div class="modal__panel">
+    <div class="modal__head">
+      <span class="modal__title" id="ckTitle">粘贴 Cookie 登录</span>
+      <button class="modal__close" data-close="cookieModal" aria-label="关闭">✕</button>
+    </div>
+    <div class="modal__body">
+      <p class="qr-hint" style="text-align:left;margin-bottom:var(--s-3)">
+        浏览器登录 bilibili.com 后：F12 → 网络 → 任一请求 → 请求标头 → 复制 Cookie 整行粘贴到下方
+      </p>
+      <textarea class="input" id="cookieText" placeholder="SESSDATA=...; bili_jct=...; DedeUserID=..."></textarea>
+    </div>
+    <div class="modal__foot">
+      <button class="btn btn--ghost btn--sm" data-close="cookieModal">取消</button>
+      <button class="btn btn--primary btn--sm" id="btnCookieSave">保存并登录</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(() => {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  let logCursor = 0, pollTimer = null, toastTimer = null;
+  let lastRunning = false;
+
+  /* ---------- 通用请求 ---------- */
+  async function api(path, opts) {
+    const res = await fetch(path, Object.assign({headers:{'Content-Type':'application/json'}}, opts||{}));
+    return res.json();
+  }
+  function toast(msg, type) {
+    const t = $('toast');
+    t.textContent = msg;
+    t.className = 'toast is-show' + (type ? ' toast--' + type : '');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { t.className = 'toast'; }, 2600);
+  }
+  function openModal(id){ $(id).classList.add('is-open'); }
+  function closeModal(id){ $(id).classList.remove('is-open'); }
+  document.querySelectorAll('[data-close]').forEach(b =>
+    b.addEventListener('click', () => closeModal(b.dataset.close)));
+  document.querySelectorAll('.modal').forEach(m =>
+    m.addEventListener('click', e => { if (e.target === m) m.classList.remove('is-open'); }));
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape')
+      document.querySelectorAll('.modal.is-open').forEach(m => m.classList.remove('is-open'));
+  });
+
+  /* ---------- 日志渲染 ---------- */
+  function lineClass(text) {
+    if (/OK.*赞/.test(text)) return 'ok';
+    if (/(错误|失败|异常|失效|未登录|cookie 无效)/i.test(text)) return 'err';
+    if (/(风控|放慢|已过期|上限)/.test(text)) return 'warn';
+    if (text.startsWith('[init]') || text.startsWith('[ui]')) return 'dim';
+    return '';
+  }
+  function appendLogs(lines) {
+    const box = $('console');
+    if (lines.length && box.querySelector('.console__empty')) box.innerHTML = '';
+    lines.forEach(l => {
+      const d = document.createElement('div');
+      const cls = lineClass(l.text);
+      d.className = 'console__line' + (cls ? ' console__line--' + cls : '');
+      d.textContent = l.text;
+      box.appendChild(d);
+    });
+    while (box.childElementCount > 400) box.removeChild(box.firstChild);
+    if (lines.length) box.scrollTop = box.scrollHeight;
+  }
+  async function pullLogs() {
+    try {
+      const r = await api('/api/log?since=' + logCursor);
+      if (r.ok) { appendLogs(r.lines || []); logCursor = r.next; }
+    } catch (e) { /* 忽略瞬时错误 */ }
+  }
+
+  /* ---------- 状态刷新 ---------- */
+  function renderStatus(s) {
+    const on = !!s.logged_in;
+    $('accDot').className = 'dot' + (on ? ' dot--on' : '');
+    $('accText').textContent = on ? ('已登录 · ' + (s.uname || '')) : '未登录 · 请扫码或粘贴 Cookie';
+    const running = !!s.running;
+    $('statePill').className = 'state-pill' + (running ? ' state-pill--on' : '');
+    $('stateDot').className = 'dot' + (running ? ' dot--on' : '');
+    $('stateText').textContent = running ? '运行中' : '空闲';
+    $('mLikes').textContent = s.likes || 0;
+    $('mClicks').textContent = s.clicks || 0;
+    $('mDurWrap').hidden = !running;
+    $('mDur').textContent = s.elapsed || 0;
+    if (s.room) $('roomHint').textContent = '上次房间 ' + s.room;
+
+    $('btnStart').disabled = running;
+    $('btnStop').disabled = !running;
+    $('room').disabled = running;
+    ['ivMin','ivMax','ckMin','ckMax','maxLikes'].forEach(id => $(id).disabled = running);
+
+    if (lastRunning && !running) pullLogs();
+    lastRunning = running;
+
+    // 扫码弹窗状态
+    if (s.qr_state && s.qr_state !== 'idle') {
+      const hint = $('qrHint');
+      hint.className = 'qr-hint';
+      if (s.qr_state === 'success') { hint.classList.add('qr-hint--ok'); hint.textContent = s.qr_msg; }
+      else if (s.qr_state === 'expired' || s.qr_state === 'error') { hint.classList.add('qr-hint--warn'); hint.textContent = s.qr_msg; }
+      else hint.textContent = s.qr_msg || '用 哔哩哔哩 App 扫描二维码';
+      if (s.qr_state === 'success') setTimeout(() => closeModal('qrModal'), 900);
+    }
+  }
+  async function pullStatus() {
+    try { renderStatus(await api('/api/status')); }
+    catch (e) { /* 服务重启间隙忽略 */ }
+  }
+
+  /* ---------- 交互 ---------- */
+  async function doQr() {
+    $('qrBox').innerHTML = '<span class="console__empty" style="color:var(--text-3);font-size:13px">正在获取二维码…</span>';
+    $('qrHint').className = 'qr-hint';
+    $('qrHint').textContent = '用 哔哩哔哩 App 扫描二维码';
+    openModal('qrModal');
+    const r = await api('/api/qr', {method:'POST', body:'{}'});
+    if (!r.ok) { $('qrHint').className = 'qr-hint qr-hint--warn'; $('qrHint').textContent = r.error || '获取失败'; return; }
+    const img = document.createElement('img');
+    img.src = r.img; img.alt = '登录二维码';
+    $('qrBox').innerHTML = ''; $('qrBox').appendChild(img);
+  }
+
+  $('btnQr').addEventListener('click', doQr);
+  $('btnQrRefresh').addEventListener('click', doQr);
+  $('btnCookie').addEventListener('click', () => { $('cookieText').value = ''; openModal('cookieModal'); });
+
+  $('btnCookieSave').addEventListener('click', async () => {
+    const raw = $('cookieText').value.trim();
+    if (!raw) { toast('请先粘贴 Cookie', 'err'); return; }
+    const btn = $('btnCookieSave'); btn.disabled = true;
+    try {
+      const r = await api('/api/cookie', {method:'POST', body: JSON.stringify({cookie: raw})});
+      if (r.ok) { toast('登录成功 · ' + r.uname, 'ok'); closeModal('cookieModal'); pullStatus(); }
+      else toast(r.error || 'Cookie 无效', 'err');
+    } finally { btn.disabled = false; }
+  });
+
+  $('btnStart').addEventListener('click', async () => {
+    const btn = $('btnStart'); btn.disabled = true;
+    try {
+      const r = await api('/api/start', {method:'POST', body: JSON.stringify({
+        room: $('room').value.trim(),
+        interval_min: $('ivMin').value, interval_max: $('ivMax').value,
+        click_min: $('ckMin').value, click_max: $('ckMax').value,
+        max_likes: $('maxLikes').value,
+      })});
+      if (r.ok) toast('已开始点赞 · 房间 ' + r.room, 'ok'); else toast(r.error || '启动失败', 'err');
+    } finally { pullStatus(); pullLogs(); }
+  });
+
+  $('btnStop').addEventListener('click', async () => {
+    const btn = $('btnStop'); btn.disabled = true;
+    try { await api('/api/stop', {method:'POST', body:'{}'}); toast('正在停止…'); }
+    finally { pullStatus(); pullLogs(); }
+  });
+
+  $('room').addEventListener('keydown', e => { if (e.key === 'Enter') $('btnStart').click(); });
+
+  /* ---------- 启动 ---------- */
+  (async () => {
+    const s = await api('/api/status');
+    if (s.room) $('room').value = s.room;
+    renderStatus(s);
+    await pullLogs();
+    pollTimer = setInterval(() => { pullStatus(); pullLogs(); }, 1000);
+  })();
+})();
+</script>
+</body>
+</html>
