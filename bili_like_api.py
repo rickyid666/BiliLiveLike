@@ -142,6 +142,11 @@ class RequestGate:
 class RoomTask:
     """单个直播间的点赞任务: 独立房间 / 独立状态 / 独立计时器 / 独立计数"""
 
+    # 各种等待时长 (抽成类常量, 方便测试里缩短, 也便于以后做界面可调)
+    WAIT_LIVE_INTERVAL = 60      # 未开播时每隔多久查一次
+    RETRY_ON_ERROR = 3           # 普通异常后的重试等待
+    SLOW_DOWN_WAIT = 10          # 触发风控后的额外等待
+
     def __init__(self, mgr, raw):
         self.mgr = mgr
         self.raw = normalize_room(raw) or raw
@@ -217,7 +222,7 @@ class RoomTask:
                 self.log("当前未开播，每分钟自动检查一次…")
                 waited = 0
                 while not self.stop_flag.is_set():
-                    if self._sleep(60):
+                    if self._sleep(self.WAIT_LIVE_INTERVAL):
                         return
                     waited += 1
                     res2 = gate.call(lambda: app.resolve_room(self.raw), self.stop_flag)
@@ -226,9 +231,9 @@ class RoomTask:
                     again, _e2 = res2
                     if again and again.get("live_status"):
                         info = again
-                        self.log(f"检测到已开播（已等待 {waited} 分钟），开始点赞")
+                        self.log(f"检测到已开播（已等待 {waited} 次检查），开始点赞")
                         break
-                    self.log(f"还没开播，已等待 {waited} 分钟…")
+                    self.log(f"还没开播，已检查 {waited} 次…")
                 if self.stop_flag.is_set():
                     return
 
@@ -260,11 +265,11 @@ class RoomTask:
                     cfg["interval_min"] = min(cfg["interval_min"] + 3, 30)
                     cfg["interval_max"] = min(cfg["interval_max"] + 5, 60)
                     save_config(cfg)
-                    if self._sleep(10):
+                    if self._sleep(self.SLOW_DOWN_WAIT):
                         return
                 else:
                     self.log(f"返回异常 code={code} message={r.get('message')}")
-                    if self._sleep(3):
+                    if self._sleep(self.RETRY_ON_ERROR):
                         return
                 limit = cfg["max_likes"]
                 if limit and self.likes >= limit:

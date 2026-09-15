@@ -1,0 +1,37 @@
+name: Verify
+
+# 每次改动先过"安全扫描 + 自动化测试", 构建/发布工作流依赖这个结果
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install requests "qrcode[pil]"
+
+      - name: Security scan (凭据/密钥/私人信息)
+        run: python tools/security_scan.py --all
+
+      - name: Tests (调度器 / 网页版 / 命令行 / 扫描器)
+        run: python -m unittest discover -s tests -v

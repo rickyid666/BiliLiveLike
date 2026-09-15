@@ -1,0 +1,30 @@
+#!/bin/sh
+# 推送前门禁 —— 发现敏感内容或测试不过就拦住
+#   git push --no-verify  可跳过(不推荐)
+#   BLL_SKIP_TESTS=1 git push  只跑安全扫描
+ROOT=$(git rev-parse --show-toplevel) || exit 0
+cd "$ROOT" || exit 0
+
+PY=python
+command -v python >/dev/null 2>&1 || PY=py
+command -v "$PY" >/dev/null 2>&1 || { echo "[pre-push] 未找到 python, 跳过检查"; exit 0; }
+
+echo "[pre-push] 安全扫描…"
+if ! "$PY" tools/security_scan.py; then
+  echo ""
+  echo "[pre-push] ✗ 发现疑似敏感内容, 已阻止推送"
+  echo "           确认是误报可以临时用: git push --no-verify"
+  exit 1
+fi
+
+if [ "$BLL_SKIP_TESTS" != "1" ]; then
+  echo "[pre-push] 运行自动化测试…"
+  if ! "$PY" -m unittest discover -s tests -q; then
+    echo ""
+    echo "[pre-push] ✗ 测试未通过, 已阻止推送 (只跳过测试: BLL_SKIP_TESTS=1 git push)"
+    exit 1
+  fi
+fi
+
+echo "[pre-push] ✓ 通过"
+exit 0

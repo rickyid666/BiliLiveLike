@@ -13,7 +13,25 @@ on:
       - "v*"
 
 jobs:
+  # 门禁: 安全扫描 + 自动化测试, 不通过就不构建/不发布
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install requests "qrcode[pil]"
+      - name: Security scan
+        run: python tools/security_scan.py --all
+      - name: Tests
+        run: python -m unittest discover -s tests
+
   build:
+    needs: gate
     runs-on: windows-latest
     steps:
       - name: Checkout
