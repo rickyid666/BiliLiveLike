@@ -66,6 +66,39 @@ quit         退出
 配好后构建日志会显示「使用固定签名构建 release 包」：
 `ANDROID_KEYSTORE_BASE64` / `ANDROID_KEYSTORE_PASSWORD` / `ANDROID_KEY_ALIAS` / `ANDROID_KEY_PASSWORD`
 
+## 开发与质量门禁
+
+改了代码不想"修 A 坏 B"，这个仓库有三道闸：
+
+**1. 本地一条命令跑全部检查**
+
+```bash
+pip install requests "qrcode[pil]"
+python tools/security_scan.py          # 安全扫描(凭据/密钥/私人信息)
+python -m unittest discover -s tests   # 25 个自动化测试
+```
+
+测试覆盖：多房间调度（闸门串行/最小间隔/状态机/单独启停/统计汇总）、网页版 HTTP 接口、
+命令行交互、以及安全扫描器自身（会故意埋假凭据验证能拦下）。
+
+**2. 推送前自动拦截（pre-push 钩子）**
+
+```bash
+git config core.hooksPath .githooks    # 克隆后执行一次
+```
+
+之后每次 `git push` 都会先跑安全扫描 + 测试：**发现疑似凭据、密钥文件、私人 IP、本机路径就直接挡下**，
+测试不过也挡下。临时跳过：`git push --no-verify`，只跳测试：`BLL_SKIP_TESTS=1 git push`。
+
+**3. CI 门禁**
+
+`Verify` 工作流在 Ubuntu + Windows 双平台跑同样的检查；`Build EXE` / `Build APK` 的构建 job
+都 `needs: gate` —— 检查不过就不构建、不发 Release。
+
+CI 失败时怎么定位（不需要任何凭据）：扫描器/测试会输出 GitHub **注解**（Actions 页面直接可见，
+也可用 `repos/{owner}/{repo}/commits/{sha}/check-runs` 读），另外失败日志会被抽取关键行
+**自动贴成提交评论**（`tools/report_ci_failure.py`）。
+
 ## 自己打包
 
 仓库带了 GitHub Actions 配置。Actions 页面手动 Run workflow 就能出三个 exe；或者推一个 `v` 开头的 tag，会自动构建并发 Release。
