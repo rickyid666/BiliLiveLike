@@ -107,7 +107,7 @@ def print_qr_console(qr):
 
 
 class BiliLikeApi:
-    def __init__(self):
+    def __init__(self, prefetch=True):
         self.s = requests.Session()
         self.s.headers.update({"User-Agent": UA})
         self.cfg = load_config()
@@ -118,7 +118,11 @@ class BiliLikeApi:
         self._uid = ""
         self._csrf = ""
         self._load_cookies()
-        # 预取 buvid3/buvid4, 降低风控概率
+        # 预取 buvid3/buvid4, 降低风控概率 (GUI 等场景可关掉以免拖慢启动)
+        if prefetch:
+            self.prefetch()
+
+    def prefetch(self):
         try:
             self.s.get("https://www.bilibili.com/", timeout=10)
         except Exception:

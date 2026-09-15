@@ -33,8 +33,9 @@
   --font:system-ui,-apple-system,"Segoe UI","Microsoft YaHei UI","PingFang SC","Hiragino Sans GB",sans-serif;
   --mono:"JetBrains Mono",Consolas,"SF Mono",Menlo,monospace;
 }
+/* 深色: 跟随系统, 也可由右上角按钮手动指定 */
 @media (prefers-color-scheme:dark){
-  :root{
+  :root:not([data-theme="light"]){
     --bg:#0F1115; --surface:#171A20; --surface-2:#1E222A; --surface-3:#252A33;
     --border:#2A2F3A; --border-strong:#39404D;
     --text:#E8EAEF; --text-2:#A8B0BB; --text-3:#79828F;
@@ -43,8 +44,21 @@
     --warn:#E0A63F; --warn-soft:#2A2317;
     --err:#FF7B7F; --err-soft:#2C1A1C;
     --console:#0B0D11; --console-fg:#CED3DA;
+    --sh-1:0 1px 2px rgba(0,0,0,.5);
     --sh-2:0 2px 8px rgba(0,0,0,.4),0 16px 32px -20px rgba(0,0,0,.6);
   }
+}
+:root[data-theme="dark"]{
+  --bg:#0F1115; --surface:#171A20; --surface-2:#1E222A; --surface-3:#252A33;
+  --border:#2A2F3A; --border-strong:#39404D;
+  --text:#E8EAEF; --text-2:#A8B0BB; --text-3:#79828F;
+  --brand-soft:#2A1B22; --brand-soft-hover:#38222C; --brand-ink:#FFA8C0;
+  --ok:#4FC97A; --ok-soft:#16281C;
+  --warn:#E0A63F; --warn-soft:#2A2317;
+  --err:#FF7B7F; --err-soft:#2C1A1C;
+  --console:#0B0D11; --console-fg:#CED3DA;
+  --sh-1:0 1px 2px rgba(0,0,0,.5);
+  --sh-2:0 2px 8px rgba(0,0,0,.4),0 16px 32px -20px rgba(0,0,0,.6);
 }
 
 *,*::before,*::after{box-sizing:border-box}
@@ -53,6 +67,19 @@ body{
   font-family:var(--font); background:var(--bg); color:var(--text);
   font-size:14px; line-height:1.6; -webkit-font-smoothing:antialiased;
   min-height:100dvh; display:flex; flex-direction:column;
+}
+/* 主题切换过渡: 只对颜色属性做平滑, 不影响布局与位移 */
+body,.card,.input,.console,.status-bar,.account-bar,.app-header,
+.btn,.state-pill,.metric,.modal__panel,.toast,.badge,.param-well{
+  transition:background-color .28s ease, color .28s ease, border-color .28s ease,
+             box-shadow .28s ease;
+}
+@keyframes fadeUp{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@keyframes lineIn{from{opacity:0;transform:translateX(-4px)}to{opacity:1;transform:none}}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(47,168,79,.5)}70%{box-shadow:0 0 0 7px rgba(47,168,79,0)}100%{box-shadow:0 0 0 0 rgba(47,168,79,0)}}
+@keyframes panelIn{from{opacity:0;transform:translateY(10px) scale(.98)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){
+  *{animation:none!important;transition:none!important}
 }
 h1,h2,h3,p{margin:0}
 button,input{font:inherit;color:inherit}
@@ -117,7 +144,7 @@ button,input{font:inherit;color:inherit}
    ============================================================ */
 .card{
   background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);
-  box-shadow:var(--sh-2);overflow:hidden;
+  box-shadow:var(--sh-2);overflow:hidden;animation:fadeUp .32s ease-out both;
 }
 .card__head{
   display:flex;align-items:center;gap:var(--s-2);
@@ -210,7 +237,7 @@ button,input{font:inherit;color:inherit}
   overscroll-behavior:contain;
 }
 @media (max-width:900px){.console{height:clamp(180px,34vh,320px)}}
-.console__line{white-space:pre-wrap;word-break:break-word}
+.console__line{white-space:pre-wrap;word-break:break-word;animation:lineIn .22s ease-out both}
 .console__line--ok{color:var(--c-ok)}
 .console__line--err{color:var(--c-err)}
 .console__line--warn{color:var(--c-warn)}
@@ -239,6 +266,8 @@ button,input{font:inherit;color:inherit}
   border:1px solid var(--border);font-weight:600;
 }
 .state-pill--on{background:var(--ok-soft);border-color:transparent;color:var(--ok)}
+.state-pill--on .dot{background:var(--ok);animation:pulse 1.8s ease-out infinite}
+.state-pill--on + .metric{color:var(--text)}
 
 /* ============================================================
    弹窗 / 提示
@@ -248,6 +277,7 @@ button,input{font:inherit;color:inherit}
   display:none;align-items:center;justify-content:center;padding:var(--s-4);z-index:50;
 }
 .modal.is-open{display:flex}
+.modal.is-open .modal__panel{animation:panelIn .24s cubic-bezier(.2,.8,.3,1) both}
 .modal__panel{
   background:var(--surface);border-radius:var(--r-lg);width:min(460px,100%);
   max-height:90dvh;overflow:auto;box-shadow:0 24px 60px -24px rgba(0,0,0,.45);
@@ -302,6 +332,9 @@ textarea.input{min-height:132px;resize:vertical;font-family:var(--mono);font-siz
       </div>
     </div>
     <div class="header-actions">
+      <button class="btn btn--soft btn--sm" id="btnTheme" title="切换主题：跟随系统 / 浅色 / 深色">
+        <span id="themeIcon">◐</span><span id="themeLabel">跟随系统</span>
+      </button>
       <button class="btn btn--soft btn--sm" id="btnQr">扫码登录</button>
       <button class="btn btn--soft btn--sm" id="btnCookie">粘贴 Cookie</button>
     </div>
@@ -442,6 +475,34 @@ textarea.input{min-height:132px;resize:vertical;font-family:var(--mono);font-siz
   const $ = (id) => document.getElementById(id);
   let logCursor = 0, pollTimer = null, toastTimer = null;
   let lastRunning = false;
+
+  /* ---------- 主题: 跟随系统 / 浅色 / 深色 ---------- */
+  const THEMES = [
+    { key: 'auto', icon: '◐', label: '跟随系统' },
+    { key: 'light', icon: '☀', label: '浅色' },
+    { key: 'dark', icon: '☾', label: '深色' },
+  ];
+  function applyTheme(key) {
+    const root = document.documentElement;
+    if (key === 'auto') root.removeAttribute('data-theme');
+    else root.setAttribute('data-theme', key);
+    const t = THEMES.find(x => x.key === key) || THEMES[0];
+    $('themeIcon').textContent = t.icon;
+    $('themeLabel').textContent = t.label;
+    try { localStorage.setItem('bll-theme', key); } catch (e) {}
+  }
+  function initTheme() {
+    let saved = 'auto';
+    try { saved = localStorage.getItem('bll-theme') || 'auto'; } catch (e) {}
+    applyTheme(saved);
+  }
+  $('btnTheme').addEventListener('click', () => {
+    let cur = 'auto';
+    try { cur = localStorage.getItem('bll-theme') || 'auto'; } catch (e) {}
+    const i = THEMES.findIndex(x => x.key === cur);
+    applyTheme(THEMES[(i + 1) % THEMES.length].key);
+  });
+  initTheme();
 
   /* ---------- 通用请求 ---------- */
   async function api(path, opts) {
