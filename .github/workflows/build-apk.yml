@@ -96,15 +96,29 @@ jobs:
               with open(log_path, encoding="utf-8", errors="replace") as f:
                   lines = f.read().splitlines()
 
-          keep = []
-          pat = re.compile(r"(error:|error;|FAILURE:|What went wrong|Caused by|Execution failed|> Task .*FAILED|\.java:\d+|symbol|BUILD FAILED)")
-          for ln in lines:
-              if pat.search(ln):
-                  keep.append(ln.rstrip())
+          def is_frame(s):
+              t = s.strip()
+              return t.startswith("at ") or t.startswith("... ")
 
-          if not keep:
-              keep = [l.rstrip() for l in lines[-40:]]
-          text = "\n".join(keep[-60:])[:6500] or "(构建日志为空)"
+          sel = []
+          # 1) javac / kotlinc 的报错行 (带后两行上下文)
+          for i, ln in enumerate(lines):
+              if re.search(r"\berror:\s", ln) or re.search(r"^e: ", ln.strip()):
+                  sel.extend([x for x in lines[i:i + 3] if not is_frame(x)])
+          # 2) Gradle 的失败概览段落
+          for i, ln in enumerate(lines):
+              if "What went wrong" in ln or "Execution failed for task" in ln:
+                  sel.extend([x for x in lines[i:i + 40] if not is_frame(x)])
+          # 3) 兜底: 最后 60 行里去掉堆栈帧
+          if not sel:
+              sel = [x for x in lines[-60:] if not is_frame(x)]
+
+          seen, uniq = set(), []
+          for x in sel:
+              if x.strip() and x not in seen:
+                  seen.add(x)
+                  uniq.append(x)
+          text = "\n".join(uniq[:70])[:6500] or "(没有解析到错误行)"
 
           body = {"body": "APK 构建失败，关键日志：\n\n```\n" + text + "\n```"}
           repo = os.environ["GITHUB_REPOSITORY"]
