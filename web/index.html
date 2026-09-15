@@ -193,6 +193,25 @@ button,input{font:inherit;color:inherit}
 /* 单值行让输入框与范围行等宽, 保持纵向对齐 */
 .param-row--single .input{flex:0 0 calc(50% - 30px)}
 
+/* 任务列表 */
+.rooms{display:flex;flex-direction:column;gap:6px;max-height:236px;overflow:auto}
+.room-row{display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--border);
+  border-radius:var(--r-md);background:var(--surface-2);cursor:pointer;
+  transition:background .18s ease,border-color .18s ease}
+.room-row:hover{background:var(--surface-3)}
+.room-row__pick{width:16px;text-align:center;font-size:15px;color:var(--brand);flex:0 0 auto}
+.room-row__room{font-weight:600;font-variant-numeric:tabular-nums;font-size:13.5px}
+.room-row__likes{margin-left:auto;font-size:12px;color:var(--text-3);
+  font-variant-numeric:tabular-nums}
+.room-row__state{font-size:11.5px;padding:2px 8px;border-radius:var(--r-full);white-space:nowrap}
+.room-row__state--run{background:var(--ok-soft);color:var(--ok)}
+.room-row__state--wait{background:var(--warn-soft);color:var(--warn)}
+.room-row__state--err{background:var(--err-soft);color:var(--err)}
+.room-row__state--idle{background:var(--surface-3);color:var(--text-3)}
+.rooms-actions{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+.grid-3{display:grid;gap:var(--s-3);grid-template-columns:repeat(3,minmax(0,1fr))}
+@media (max-width:520px){.grid-3{grid-template-columns:minmax(0,1fr)}}
+
 /* ============================================================
    按钮 (默认/悬停/按下/聚焦/禁用)
    ============================================================ */
@@ -330,9 +349,6 @@ textarea.input{min-height:132px;resize:vertical;font-family:var(--mono);font-siz
 .switch input:checked + .switch__track{background:var(--brand);border-color:var(--brand)}
 .switch input:checked + .switch__track .switch__thumb{transform:translateX(18px)}
 .switch input:focus-visible + .switch__track{outline:2px solid var(--brand);outline-offset:2px}
-.switch input:disabled + .switch__track{opacity:.55}
-
-.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 
 </style>
 </head>
@@ -379,10 +395,27 @@ textarea.input{min-height:132px;resize:vertical;font-family:var(--mono);font-siz
           <label class="field__label" for="room">房间号 / 直播间链接</label>
           <input class="input" id="room" inputmode="numeric" placeholder="例如 1796290755">
         </div>
-        <div class="grid-2">
-          <button class="btn btn--primary btn--block" id="btnStart">开始点赞</button>
-          <button class="btn btn--danger btn--block" id="btnStop" disabled>停止</button>
+        <div class="grid-3">
+          <button class="btn btn--ghost btn--block" id="btnAdd">添加任务</button>
+          <button class="btn btn--primary btn--block" id="btnStart">启动选中</button>
+          <button class="btn btn--danger btn--block" id="btnStop" disabled>全部停止</button>
         </div>
+      </div>
+    </section>
+
+<section class="card">
+      <div class="card__head">
+        <h2 class="card__title">任务列表</h2>
+        <span class="card__hint" id="roomsHint">勾选的行参与「启动选中」</span>
+      </div>
+      <div class="card__divider"></div>
+      <div class="card__body" style="padding-top:var(--s-4)">
+        <div class="rooms-actions">
+          <button class="btn btn--ghost btn--sm" id="btnStartAll">全部开始</button>
+          <button class="btn btn--danger btn--sm" id="btnStopOne">停止勾选</button>
+          <button class="btn btn--ghost btn--sm" id="btnRemove">删除勾选</button>
+        </div>
+        <div class="rooms" id="rooms"></div>
       </div>
     </section>
 
@@ -407,6 +440,11 @@ textarea.input{min-height:132px;resize:vertical;font-family:var(--mono);font-siz
             <span class="param-row__sep">~</span>
             <input class="input input--sm" id="ckMax" inputmode="numeric" value="20">
             <span class="param-row__unit">赞</span>
+          </div>
+          <div class="param-row param-row--single">
+            <span class="param-row__name">全局间隔</span>
+            <input class="input input--sm" id="globalGap" inputmode="decimal" value="4">
+            <span class="param-row__unit">秒（同一账号两次请求的最小间隔）</span>
           </div>
           <div class="param-row param-row--single">
             <span class="param-row__name">单场上限</span>
@@ -594,10 +632,14 @@ textarea.input{min-height:132px;resize:vertical;font-family:var(--mono);font-siz
     $('mDur').textContent = s.elapsed || 0;
     if (s.room) $('roomHint').textContent = '上次房间 ' + s.room;
 
-    $('btnStart').disabled = running;
-    $('btnStop').disabled = !running;
-    $('room').disabled = running;
-    ['ivMin','ivMax','ckMin','ckMax','maxLikes'].forEach(id => $(id).disabled = running);
+    renderRooms(s.rooms || []);
+    const runningCount = (s.rooms || []).filter(x => x.alive).length;
+    $('roomsHint').textContent = runningCount
+      ? runningCount + ' 个任务运行中 · 勾选的行参与「启动选中」'
+      : '勾选的行参与「启动选中」';
+    $('btnStop').disabled = !runningCount;
+    ['ivMin', 'ivMax', 'ckMin', 'ckMax', 'maxLikes', 'waitLive', 'globalGap']
+      .forEach(id => { $(id).disabled = false; });
 
     if (lastRunning && !running) pullLogs();
     lastRunning = running;
@@ -616,6 +658,114 @@ textarea.input{min-height:132px;resize:vertical;font-family:var(--mono);font-siz
     try { renderStatus(await api('/api/status')); }
     catch (e) { /* 服务重启间隙忽略 */ }
   }
+
+  /* ---------- 任务列表 ---------- */
+  const checked = new Set();
+  const STATE_TEXT = { idle: '待启动', waiting: '等待开播', running: '运行中',
+                       done: '已完成', stopped: '已停止', error: '出错' };
+  function stateClass(x) {
+    if (x.state === 'running') return 'room-row__state--run';
+    if (x.state === 'waiting') return 'room-row__state--wait';
+    if (x.state === 'error') return 'room-row__state--err';
+    return 'room-row__state--idle';
+  }
+  function renderRooms(rooms) {
+    const box = $('rooms');
+    const list = rooms || [];
+    ['idle', 'waiting'].forEach(() => {});
+    const alive = new Set(list.map(r => r.room));
+    Array.from(checked).forEach(r => { if (!alive.has(r)) checked.delete(r); });
+    if (!list.length) {
+      box.innerHTML = '<p style="color:var(--text-3);font-size:13px;margin:0">'
+        + '还没有任务，填入房间号点「添加任务」</p>';
+      return;
+    }
+    box.innerHTML = '';
+    list.forEach(x => {
+      const row = document.createElement('div');
+      row.className = 'room-row';
+      const msg = x.state === 'done' || x.state === 'error' ? (x.msg || '') : '';
+      row.innerHTML = '<span class="room-row__pick">' + (checked.has(x.room) ? '☑' : '☐') + '</span>'
+        + '<span class="room-row__room">' + x.room + '</span>'
+        + '<span class="room-row__state ' + stateClass(x) + '">'
+        + (STATE_TEXT[x.state] || x.state) + (msg ? ' · ' + msg : '') + '</span>'
+        + '<span class="room-row__likes">' + (x.likes || 0) + ' 赞</span>';
+      row.addEventListener('click', () => {
+        if (checked.has(x.room)) checked.delete(x.room); else checked.add(x.room);
+        row.querySelector('.room-row__pick').textContent = checked.has(x.room) ? '☑' : '☐';
+      });
+      box.appendChild(row);
+    });
+  }
+
+  function params() {
+    return {
+      interval_min: $('ivMin').value, interval_max: $('ivMax').value,
+      click_min: $('ckMin').value, click_max: $('ckMax').value,
+      max_likes: $('maxLikes').value, wait_live: $('waitLive').checked,
+      global_gap: $('globalGap').value,
+    };
+  }
+
+  async function post(path, payload) {
+    const r = await api(path, { method: 'POST', body: JSON.stringify(payload || {}) });
+    if (r.error) toast(r.error, 'err');
+    return r;
+  }
+
+  $('btnAdd').addEventListener('click', async () => {
+    const raw = $('room').value.trim();
+    if (!raw) { toast('请先填写房间号或链接', 'err'); return; }
+    for (const part of raw.replace(/,/g, ' ').split(/\s+/).filter(Boolean)) {
+      const r = await post('/api/rooms/add', { room: part });
+      if (r.ok) $('room').value = '';
+      else break;
+    }
+    toast('已添加到任务列表', 'ok');
+    pullStatus();
+  });
+
+  $('btnStartAll').addEventListener('click', async () => {
+    const r = await post('/api/rooms/start', params());
+    if (r.ok) toast('已启动 ' + r.started + ' 个任务', 'ok');
+    pullStatus();
+  });
+
+  $('btnStart').addEventListener('click', async () => {
+    const targets = Array.from(checked);
+    if ($('room').value.trim()) {           // 输入框里还有房间号: 先添加再启动
+      for (const part of $('room').value.replace(/,/g, ' ').split(/\s+/).filter(Boolean)) {
+        await post('/api/rooms/add', { room: part });
+        targets.push(part);
+      }
+      $('room').value = '';
+    }
+    if (!targets.length) { toast('先在列表里勾选要启动的房间', 'err'); return; }
+    const r = await post('/api/rooms/start', Object.assign({ rooms: targets }, params()));
+    if (r.ok) toast('已启动 ' + r.started + ' 个任务', 'ok');
+    pullStatus();
+  });
+
+  $('btnStop').addEventListener('click', async () => {
+    const r = await post('/api/rooms/stop', {});
+    toast('已请求停止 ' + (r.stopped || 0) + ' 个任务');
+    pullStatus();
+  });
+
+  $('btnStopOne').addEventListener('click', async () => {
+    const targets = Array.from(checked);
+    if (!targets.length) { toast('先勾选要停止的房间', 'err'); return; }
+    for (const t of targets) await post('/api/rooms/stop', { room: t });
+    pullStatus();
+  });
+
+  $('btnRemove').addEventListener('click', async () => {
+    const targets = Array.from(checked);
+    if (!targets.length) { toast('先勾选要删除的房间', 'err'); return; }
+    for (const t of targets) await post('/api/rooms/remove', { room: t });
+    checked.clear();
+    pullStatus();
+  });
 
   /* ---------- 交互 ---------- */
   async function doQr() {
@@ -653,7 +803,6 @@ textarea.input{min-height:132px;resize:vertical;font-family:var(--mono);font-siz
         interval_min: $('ivMin').value, interval_max: $('ivMax').value,
         click_min: $('ckMin').value, click_max: $('ckMax').value,
         max_likes: $('maxLikes').value,
-      wait_live: $('waitLive').checked,
       })});
       if (r.ok) toast('已开始点赞 · 房间 ' + r.room, 'ok'); else toast(r.error || '启动失败', 'err');
     } finally { pullStatus(); pullLogs(); }

@@ -176,6 +176,8 @@ def collect_status():
         "likes": s["likes"], "clicks": s["clicks"],
         "room": app.cfg.get("room", ""),
         "wait_live": app.cfg.get("wait_live", True),
+        "global_gap": app.cfg.get("global_gap", 4.0),
+        "rooms": app.manager.snapshot(),
         "elapsed": elapsed,
         "qr_state": ST.qr_state, "qr_msg": ST.qr_msg,
     }
@@ -254,6 +256,11 @@ def build_handler(html_path):
                     return self._send(200, {"ok": False, "error": err})
                 return self._send(200, {"ok": True, **info})
 
+            if path == "/api/rooms":
+                app = ensure_app()
+                return self._send(200, {"ok": True, "rooms": app.manager.snapshot(),
+                                        "global_gap": app.cfg.get("global_gap", 4.0)})
+
             if path == "/api/account":
                 ok, uname = refresh_account()
                 return self._send(200, {"ok": True, "logged_in": ok, "uname": uname})
@@ -280,6 +287,64 @@ def build_handler(html_path):
                     ST.add_log(f"[cookie] 登录成功! 欢迎你, {uname}")
                 return self._send(200, {"ok": ok, "fields": n, "uname": uname,
                                         "error": "" if ok else "Cookie 无效或已过期"})
+
+            if path == "/api/rooms/add":
+                app = ensure_app()
+                raw = (body.get("room") or "").strip()
+                if not raw:
+                    return self._send(200, {"ok": False, "error": "请填写房间号"})
+                ok, bad = app.manager.add_many([raw])
+                if bad:
+                    return self._send(200, {"ok": False, "error": bad[0][1]})
+                return self._send(200, {"ok": True, "rooms": app.manager.snapshot()})
+
+            if path == "/api/rooms/remove":
+                app = ensure_app()
+                raw = (body.get("room") or "").strip()
+                done = app.manager.remove(raw)
+                return self._send(200, {"ok": done, "rooms": app.manager.snapshot(),
+                                        "error": "" if done else "没找到该房间"})
+
+            if path == "/api/rooms/start":
+                app = ensure_app()
+                ok, uname = refresh_account()
+                if not ok:
+                    return self._send(200, {"ok": False, "error": "未登录，请先扫码或粘贴 Cookie"})
+                cfg = app.cfg
+                try:
+                    cfg["interval_min"] = max(1.0, float(body.get("interval_min", 5)))
+                    cfg["interval_max"] = max(cfg["interval_min"],
+                                              float(body.get("interval_max", 8)))
+                    cfg["click_min"] = max(1, int(body.get("click_min", 10)))
+                    cfg["click_max"] = max(cfg["click_min"], int(body.get("click_max", 20)))
+                    cfg["max_likes"] = max(0, int(body.get("max_likes", 1000)))
+                    cfg["wait_live"] = bool(body.get("wait_live", True))
+                    cfg["global_gap"] = max(0.0, float(body.get("global_gap", 4.0)))
+                except (TypeError, ValueError):
+                    return self._send(200, {"ok": False, "error": "参数请填写数字"})
+                core.save_config(cfg)
+                app.manager.gate.min_gap = cfg["global_gap"]
+                targets = body.get("rooms") or []
+                if targets:
+                    started = 0
+                    for t in targets:
+                        task, err = app.manager.start(t)
+                        if task:
+                            started += 1
+                    return self._send(200, {"ok": True, "started": started,
+                                            "rooms": app.manager.snapshot()})
+                if not app.manager.list():
+                    return self._send(200, {"ok": False, "error": "任务列表是空的，先添加房间号"})
+                n = app.manager.start_all()
+                return self._send(200, {"ok": True, "started": n,
+                                        "rooms": app.manager.snapshot()})
+
+            if path == "/api/rooms/stop":
+                app = ensure_app()
+                raw = (body.get("room") or "").strip()
+                n = app.manager.stop(raw or None)
+                return self._send(200, {"ok": True, "stopped": n,
+                                        "rooms": app.manager.snapshot()})
 
             if path == "/api/start":
                 app = ensure_app()

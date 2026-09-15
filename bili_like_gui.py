@@ -799,6 +799,9 @@ class App:
         self.room_entry = ttk.Entry(line, textvariable=self.room_var,
                                     style="Modern.TEntry", font=F.BODY)
         self.room_entry.pack(side="left", fill="x", expand=True, ipady=3)
+        self.add_btn = RButton(line, "添加", self._add_rooms, kind="ghost",
+                               height=40, radius=10, font=F.BTN, min_width=64, pad_x=12)
+        self.add_btn.pack(side="left", padx=(S.SM, 0))
         self.start_btn = RButton(line, "开始点赞", self._start, kind="primary",
                                  height=40, radius=10, font=F.BTN)
         self.start_btn.pack(side="left", padx=(S.SM, 0))
@@ -806,6 +809,61 @@ class App:
                                 height=40, radius=10, font=F.BTN)
         self.stop_btn.set_enabled(False)
         self.stop_btn.pack(side="left", padx=(S.SM, 0))
+        tk.Label(b, text="房间号可一次填多个（空格分隔），也可以直接贴直播间链接",
+                 bg=C.CARD, fg=C.TEXT_3, font=F.CAPTION).pack(anchor="w",
+                                                              pady=(S.XS, 0))
+
+        ops = tk.Frame(b, bg=C.CARD)
+        ops.pack(fill="x", pady=(S.SM, 0))
+        self.btn_start_sel = RButton(ops, "启动选中", self._start_checked,
+                                     kind="primary", height=34, radius=9,
+                                     font=F.BTN_SM, min_width=76, pad_x=12)
+        self.btn_start_sel.pack(side="left")
+        self.btn_start_all = RButton(ops, "全部开始", self._start_all,
+                                     kind="ghost", height=34, radius=9,
+                                     font=F.BTN_SM, min_width=76, pad_x=12)
+        self.btn_start_all.pack(side="left", padx=(S.SM, 0))
+        self.btn_stop_all = RButton(ops, "全部停止", self._stop_all,
+                                    kind="danger", height=34, radius=9,
+                                    font=F.BTN_SM, min_width=76, pad_x=12)
+        self.btn_stop_all.pack(side="left", padx=(S.SM, 0))
+        self.btn_del = RButton(ops, "删除选中", self._remove_checked,
+                               kind="ghost", height=34, radius=9,
+                               font=F.BTN_SM, min_width=76, pad_x=12)
+        self.btn_del.pack(side="left", padx=(S.SM, 0))
+        self._checked = set()
+
+        # --- 任务列表 ---
+        lhead = tk.Frame(b, bg=C.CARD)
+        lhead.pack(fill="x", pady=(S.LG, S.SM))
+        self.lbl_tasks = tk.Label(lhead, text="直播间任务", bg=C.CARD,
+                                  fg=C.TEXT_2, font=F.LABEL)
+        self.lbl_tasks.pack(side="left")
+        self.task_hint = tk.Label(lhead, text="勾选的行参与「启动选中」",
+                                  bg=C.CARD, fg=C.TEXT_3, font=F.CAPTION)
+        self.task_hint.pack(side="right")
+
+        tree_wrap = tk.Frame(b, bg=C.CARD)
+        tree_wrap.pack(fill="x")
+        self.tree = ttk.Treeview(tree_wrap, columns=("pick", "room", "state", "likes"),
+                                 show="headings", height=5, style="Modern.Treeview",
+                                 selectmode="extended")
+        for col, text, w, anchor in (("pick", "", 34, "center"),
+                                     ("room", "房间", 110, "w"),
+                                     ("state", "状态", 130, "w"),
+                                     ("likes", "已点赞", 70, "e")):
+            self.tree.heading(col, text=text)
+            self.tree.column(col, width=w, anchor=anchor, stretch=(col == "state"))
+        vsb = ttk.Scrollbar(tree_wrap, orient="vertical", command=self.tree.yview,
+                            style="Modern.Vertical.TScrollbar")
+        self.tree.configure(yscrollcommand=vsb.set)
+        self.tree.pack(side="left", fill="both", expand=True)
+        vsb.pack(side="right", fill="y")
+        for tag, color in (("run", C.SUCCESS), ("wait", C.WARN), ("done", C.TEXT_3),
+                           ("err", C.DANGER), ("idle", C.TEXT_2)):
+            self.tree.tag_configure(tag, foreground=color)
+        self.tree.bind("<Button-1>", self._on_tree_click)
+
 
         # --- 参数 ---
         phead = tk.Frame(b, bg=C.CARD)
@@ -820,6 +878,7 @@ class App:
         well = Panel(b, parent_role="CARD")
         well.pack(fill="x")
         cfg = core.load_config()
+        # 多房间: 全局请求闸门间隔(同一账号两次请求的最小间隔)
         self.iv_min = tk.StringVar(value=str(cfg.get("interval_min", 5.0)))
         self.iv_max = tk.StringVar(value=str(cfg.get("interval_max", 8.0)))
         self.ck_min = tk.StringVar(value=str(cfg.get("click_min", 10)))
@@ -828,6 +887,8 @@ class App:
         self._param(well.body, "请求间隔", self.iv_min, "秒", self.iv_max, "秒")
         self._param(well.body, "每次连击", self.ck_min, "赞", self.ck_max, "赞")
         self._param(well.body, "单场上限", self.max_likes, "赞", None, None)
+        self.global_gap = tk.StringVar(value=str(cfg.get("global_gap", 4.0)))
+        self._param(well.body, "全局间隔", self.global_gap, "秒", None, None)
 
         wait_row = tk.Frame(well.body, bg=C.CARD_ALT)
         wait_row.pack(fill="x")
@@ -1059,10 +1120,115 @@ class App:
                 self.state_dot.config(fg=C.TEXT_3)
                 self.state_label.config(text="空闲", fg=C.TEXT)
             dur = f" · 已运行 {int(time.time() - s['start'])}s" if (s.get("start") and running) else ""
-            self.metric_label.config(text=f"已点赞 {s['likes']} · {s['clicks']} 次请求{dur}")
-        self.start_btn.set_enabled(not running)
+            self.metric_label.config(
+                text=f"已点赞 {s['likes']} · {s['clicks']} 次请求 · "
+                     f"{s.get('active', 0)}/{s.get('rooms', 0)} 个房间运行中{dur}")
+            self._sync_tasks()
+        self.start_btn.set_enabled(bool(self.app))
+        self.add_btn.set_enabled(bool(self.app))
         self.stop_btn.set_enabled(running)
+        self.btn_start_all.set_enabled(bool(self.app) and bool(self._checked or True))
+        self.btn_stop_all.set_enabled(running)
         self.root.after(400, self._poll)
+
+    # ---------- 任务列表 ----------
+    @staticmethod
+    def _state_view(snap):
+        st = snap.get("state")
+        return {
+            "idle": ("待启动", "idle"),
+            "waiting": ("等待开播", "wait"),
+            "running": ("运行中", "run"),
+            "done": (snap.get("msg") or "已完成", "done"),
+            "stopped": ("已停止", "done"),
+            "error": (snap.get("msg") or "出错", "err"),
+        }.get(st, (snap.get("msg") or st, "idle"))
+
+    def _sync_tasks(self):
+        snap = {x["room"]: x for x in self.app.manager.snapshot()}
+        rows = set(self.tree.get_children(""))
+        for iid in rows - set(snap):
+            self.tree.delete(iid)
+            self._checked.discard(iid)
+        for room, x in snap.items():
+            text, tag = self._state_view(x)
+            vals = ("☑" if room in self._checked else "☐", room, text, x["likes"])
+            if room in rows:
+                self.tree.item(room, values=vals, tags=(tag,))
+            else:
+                self.tree.insert("", "end", iid=room, values=vals, tags=(tag,))
+
+    def _on_tree_click(self, event):
+        if self.tree.identify_region(event.x, event.y) != "cell":
+            return
+        if self.tree.identify_column(event.x) != "#1":
+            return
+        iid = self.tree.identify_row(event.y)
+        if not iid:
+            return
+        if iid in self._checked:
+            self._checked.discard(iid)
+        else:
+            self._checked.add(iid)
+        self.tree.set(iid, "pick", "☑" if iid in self._checked else "☐")
+        return "break"
+
+    def _checked_or_all(self):
+        if self._checked:
+            return sorted(self._checked)
+        return [x["room"] for x in self.app.manager.snapshot()]
+
+    def _add_rooms(self):
+        if not self.app:
+            return
+        raws = self.room_var.get().replace(",", " ").split()
+        if not raws:
+            messagebox.showwarning("没填房间号", "请填写一个或多个房间号 / 直播间链接（空格分隔）")
+            return
+        for r in raws:
+            ok, bad = self.app.manager.add_many([r])
+            if bad:
+                messagebox.showwarning("房间号不对", f"{r}：{bad[0][1]}")
+        self.room_var.set("")
+        self._sync_tasks()
+
+    def _start_checked(self):
+        if not self.app:
+            return
+        rooms = self._checked_or_all()
+        if not rooms:
+            messagebox.showinfo("没有任务", "先添加房间号")
+            return
+        if not self._apply_settings():
+            return
+        threading.Thread(target=self._start_rooms, args=(rooms,), daemon=True).start()
+
+    def _start_rooms(self, rooms):
+        for r in rooms:
+            self.app.manager.start(r)
+
+    def _start_all(self):
+        if not self.app:
+            return
+        if not self.app.manager.list():
+            messagebox.showinfo("没有任务", "先添加房间号")
+            return
+        if not self._apply_settings():
+            return
+        threading.Thread(target=self.app.manager.start_all, daemon=True).start()
+
+    def _stop_all(self):
+        if self.app:
+            n = self.app.manager.stop()
+            self._append_log(f"[ui] 已请求停止 {n} 个任务")
+
+    def _remove_checked(self):
+        if not self.app:
+            return
+        for r in list(self._checked):
+            self.app.manager.remove(r)
+            self._checked.discard(r)
+        self._sync_tasks()
 
     # ---- 运行中状态点呼吸动画 ----
     def _start_pulse(self):
@@ -1148,23 +1314,37 @@ class App:
             messagebox.showwarning("参数不对", "连击需要：下限 > 0 且 ≤ 上限")
             return False
         cfg["wait_live"] = bool(self.wait_live.get())
+        try:
+            cfg["global_gap"] = max(0.0, float(self.global_gap.get()))
+        except ValueError:
+            messagebox.showwarning("参数不对", "全局间隔请填写数字")
+            return False
         cfg["theme"] = self.theme
         core.save_config(cfg)
         return True
 
     def _start(self):
+        """输入框里有房间号 -> 添加并启动它; 没有 -> 启动勾选/全部任务"""
         if not self.app:
-            return
-        room = core.normalize_room(self.room_var.get())
-        if not room:
-            messagebox.showwarning("房间号不对",
-                                   "请填写房间号（纯数字）或直播间链接\n"
-                                   "例如：1796290755 或 https://live.bilibili.com/1796290755")
             return
         if not self._apply_settings():
             return
-        self.room_var.set(room)
-        threading.Thread(target=self.app.start, args=(room,), daemon=True).start()
+        raws = self.room_var.get().replace(",", " ").split()
+        if raws:
+            rooms = []
+            for r in raws:
+                room = core.normalize_room(r)
+                if not room:
+                    messagebox.showwarning("房间号不对",
+                                           "请填写房间号（纯数字）或直播间链接\n"
+                                           "例如：1796290755 或 https://live.bilibili.com/1796290755")
+                    return
+                rooms.append(room)
+            self.room_var.set("")
+            threading.Thread(target=self._start_rooms, args=(rooms,), daemon=True).start()
+            self.root.after(300, self._sync_tasks)
+            return
+        self._start_checked()
 
     def _stop(self):
         if self.app:
@@ -1197,6 +1377,21 @@ def setup_styles(root: tk.Tk):
                                 ("disabled", C.DISABLED_BG)],
            indicatorforeground=[("selected", C.ON_PRIMARY),
                                 ("disabled", C.DISABLED_FG)])
+
+    st.configure("Modern.Treeview",
+                 background=C.CARD, fieldbackground=C.CARD, foreground=C.TEXT,
+                 bordercolor=C.BORDER, rowheight=30, font=F.LABEL,
+                 relief="flat", borderwidth=0)
+    st.map("Modern.Treeview",
+           background=[("selected", C.PRIMARY_SOFT)],
+           foreground=[("selected", C.TEXT)])
+    st.configure("Modern.Treeview.Heading",
+                 background=C.CARD_ALT, foreground=C.TEXT_2,
+                 font=F.LABEL, relief="flat", borderwidth=0, padding=(S.SM, S.XS))
+    st.map("Modern.Treeview.Heading", background=[("active", C.CARD_ALT)])
+    st.configure("Modern.Vertical.TScrollbar",
+                 background=C.CARD_ALT, troughcolor=C.CARD,
+                 bordercolor=C.CARD, arrowcolor=C.TEXT_3, relief="flat")
 
     st.configure("Modern.TEntry",
                  fieldbackground=C.CARD_ALT, foreground=C.TEXT,

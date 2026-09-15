@@ -59,6 +59,8 @@ DEFAULT_CONFIG = {
     "click_max": 20,
     "max_likes": 1000,      # 单场直播点赞上限(B站单场点赞获取上限约1000)
     "wait_live": True,      # 未开播时每分钟自动检查, 开播后自动开始
+    "rooms": [],            # 多房间任务列表(自动保存)
+    "global_gap": 4.0,      # 全局请求闸门: 同一账号任意两次请求至少间隔(秒), 风控关键
 }
 
 QR_GENERATE = "https://passport.bilibili.com/x/passport-login/web/qrcode/generate"
@@ -107,15 +109,288 @@ def print_qr_console(qr):
             print("".join("  " if v else "##" for v in row))
 
 
+class RequestGate:
+    """全局请求闸门: 同一账号的请求串行放行, 且彼此至少间隔 min_gap 秒
+
+    多房间并发时这是最关键的一环 —— 各任务独立计时互不等待, 但真正出网的请求
+    仍然是一条线, 不会出现"同一账号几秒内并发打多个接口"这种明显的自动化特征。
+    """
+
+    def __init__(self, min_gap=4.0):
+        self.min_gap = float(min_gap)
+        self._lock = threading.Lock()
+        self._last = 0.0
+        self.waited = 0            # 被闸门拦下等待的次数(用于状态展示)
+
+    def call(self, fn, stop_flag=None):
+        """串行执行 fn; 若还未到最小间隔则等待。等待中被停止则返回 None"""
+        with self._lock:
+            end = self._last + self.min_gap
+            now = time.time()
+            if now < end:
+                self.waited += 1
+                while time.time() < end:
+                    if stop_flag is not None and stop_flag.is_set():
+                        return None
+                    time.sleep(min(0.1, max(0.0, end - time.time())))
+            try:
+                return fn()
+            finally:
+                self._last = time.time()
+
+
+class RoomTask:
+    """单个直播间的点赞任务: 独立房间 / 独立状态 / 独立计时器 / 独立计数"""
+
+    def __init__(self, mgr, raw):
+        self.mgr = mgr
+        self.raw = normalize_room(raw) or raw
+        self.short = self.raw
+        self.room_id = None
+        self.state = "idle"        # idle / waiting / running / done / error / stopped
+        self.msg = "待启动"
+        self.likes = 0
+        self.clicks = 0
+        self.started_at = None
+        self.stop_flag = threading.Event()
+        self.thread = None
+
+    def snapshot(self):
+        return {
+            "room": self.raw,
+            "room_id": self.room_id,
+            "state": self.state,
+            "msg": self.msg,
+            "likes": self.likes,
+            "clicks": self.clicks,
+            "alive": bool(self.thread and self.thread.is_alive()),
+            "elapsed": (int(time.time() - self.started_at)
+                        if self.started_at and self.thread and self.thread.is_alive() else 0),
+        }
+
+    def log(self, text):
+        print(f"[task {self.short}] {text}")
+
+    def start(self):
+        if self.thread and self.thread.is_alive():
+            return False
+        self.stop_flag.clear()
+        self.state, self.msg = "waiting", "启动中"
+        self.thread = threading.Thread(target=self.run, daemon=True,
+                                       name=f"room-{self.raw}")
+        self.thread.start()
+        return True
+
+    def stop(self):
+        self.stop_flag.set()
+
+    def _sleep(self, seconds):
+        """可被打断的等待; 返回 True 表示应中断"""
+        end = time.time() + seconds
+        while time.time() < end:
+            if self.stop_flag.is_set():
+                return True
+            time.sleep(min(0.1, max(0.0, end - time.time())))
+        return self.stop_flag.is_set()
+
+    def run(self):
+        app, gate, cfg = self.mgr.app, self.mgr.gate, self.mgr.app.cfg
+        try:
+            res = gate.call(lambda: app.resolve_room(self.raw), self.stop_flag)
+            if res is None:
+                return
+            info, err = res
+            if not info:
+                self.state, self.msg = "error", err or "房间解析失败"
+                self.log(self.msg)
+                return
+            self.room_id = info["room_id"]
+            self.short = info.get("short") or self.raw
+
+            # (1) 未开播: 按配置决定等待还是收工
+            if not info["live_status"]:
+                if not cfg.get("wait_live", True):
+                    self.state, self.msg = "done", "未开播，已结束"
+                    self.log("该直播间当前未开播，点赞无效，任务结束")
+                    return
+                self.state, self.msg = "waiting", "等待开播"
+                self.log("当前未开播，每分钟自动检查一次…")
+                waited = 0
+                while not self.stop_flag.is_set():
+                    if self._sleep(60):
+                        return
+                    waited += 1
+                    res2 = gate.call(lambda: app.resolve_room(self.raw), self.stop_flag)
+                    if res2 is None:
+                        return
+                    again, _e2 = res2
+                    if again and again.get("live_status"):
+                        info = again
+                        self.log(f"检测到已开播（已等待 {waited} 分钟），开始点赞")
+                        break
+                    self.log(f"还没开播，已等待 {waited} 分钟…")
+                if self.stop_flag.is_set():
+                    return
+
+            # (2) 开播: 进入点赞循环
+            self.state, self.msg = "running", "运行中"
+            self.started_at = time.time()
+            self.log(f"开始点赞（间隔 {cfg['interval_min']}~{cfg['interval_max']}s，"
+                     f"每次 {cfg['click_min']}~{cfg['click_max']} 赞，上限 {cfg['max_likes']}）")
+
+            while not self.stop_flag.is_set():
+                if self._sleep(random.uniform(cfg["interval_min"], cfg["interval_max"])):
+                    return
+                res3 = gate.call(lambda: app._like_once(info), self.stop_flag)
+                if res3 is None:
+                    return
+                r, click_time = res3
+                self.clicks += 1
+                code = r.get("code")
+                if code == 0:
+                    self.likes += click_time
+                    self.log(f"第{self.clicks}次请求 OK (+{click_time} 赞，累计 {self.likes})")
+                elif code == -101:
+                    self.state, self.msg = "error", "登录已失效"
+                    self.log("登录已失效，请重新登录，任务停止")
+                    return
+                elif code == -352:
+                    self.msg = "风控降速中"
+                    self.log("触发风控(-352)，自动放慢速度…")
+                    cfg["interval_min"] = min(cfg["interval_min"] + 3, 30)
+                    cfg["interval_max"] = min(cfg["interval_max"] + 5, 60)
+                    save_config(cfg)
+                    if self._sleep(10):
+                        return
+                else:
+                    self.log(f"返回异常 code={code} message={r.get('message')}")
+                    if self._sleep(3):
+                        return
+                limit = cfg["max_likes"]
+                if limit and self.likes >= limit:
+                    self.state, self.msg = "done", f"已达上限 {limit}"
+                    self.log(f"已达单场点赞上限({limit})，任务完成")
+                    return
+        except Exception as e:
+            self.state, self.msg = "error", f"异常: {e}"
+            self.log(f"任务异常: {e}")
+        finally:
+            if self.state not in ("done", "error"):
+                self.state, self.msg = "stopped", "已停止"
+            self.log("任务结束")
+
+
+class TaskManager:
+    """多直播间任务调度: 统一添加 / 启动 / 停止 / 查询, 并保证全局限速"""
+
+    def __init__(self, app):
+        self.app = app
+        self.tasks = {}                       # short_room -> RoomTask (保持插入顺序)
+        self._lock = threading.RLock()
+        self.gate = RequestGate(min_gap=app.cfg.get("global_gap", 4.0))
+
+    # ---------- 增删 ----------
+    def add(self, raw):
+        room = normalize_room(raw)
+        if not room:
+            return None, "房间号格式不对（支持纯数字或直播间链接）"
+        with self._lock:
+            if room in self.tasks:
+                return self.tasks[room], ""
+            task = RoomTask(self, room)
+            self.tasks[room] = task
+            self._save()
+            return task, ""
+
+    def add_many(self, raws):
+        ok, bad = 0, []
+        for r in raws:
+            t, err = self.add(r)
+            if t:
+                ok += 1
+            else:
+                bad.append((r, err))
+        return ok, bad
+
+    def remove(self, raw):
+        room = normalize_room(raw) or raw
+        with self._lock:
+            task = self.tasks.pop(room, None)
+            if task:
+                task.stop()
+                self._save()
+            return task is not None
+
+    def get(self, raw):
+        return self.tasks.get(normalize_room(raw) or raw)
+
+    def list(self):
+        with self._lock:
+            return list(self.tasks.values())
+
+    # ---------- 启动 / 停止 ----------
+    def start(self, raw):
+        task, err = self.add(raw)
+        if not task:
+            return None, err
+        task.start()
+        return task, ""
+
+    def start_all(self):
+        n = 0
+        for t in self.list():
+            if t.start():
+                n += 1
+        return n
+
+    def stop(self, raw=None):
+        if raw:
+            t = self.get(raw)
+            if t:
+                t.stop()
+                return 1
+            return 0
+        n = 0
+        for t in self.list():
+            if t.thread and t.thread.is_alive():
+                t.stop()
+                n += 1
+        return n
+
+    # ---------- 统计 ----------
+    def active_count(self):
+        return sum(1 for t in self.list() if t.thread and t.thread.is_alive())
+
+    def totals(self):
+        likes = sum(t.likes for t in self.list())
+        clicks = sum(t.clicks for t in self.list())
+        return likes, clicks
+
+    def snapshot(self):
+        return [t.snapshot() for t in self.list()]
+
+    # ---------- 持久化 ----------
+    def _save(self):
+        try:
+            self.app.cfg["rooms"] = [t.raw for t in self.list()]
+            save_config(self.app.cfg)
+        except Exception:
+            pass
+
+    def load_saved(self):
+        for raw in list(self.app.cfg.get("rooms", [])):
+            self.add(raw)
+
+
 class BiliLikeApi:
     def __init__(self, prefetch=True):
         self.s = requests.Session()
         self.s.headers.update({"User-Agent": UA})
         self.cfg = load_config()
-        self.running = False
         self.paused = False
-        self.stats = {"likes": 0, "clicks": 0, "room": "", "start": None}
         self._stop = threading.Event()
+        self.manager = TaskManager(self)     # 多房间任务调度
+        self.manager.load_saved()
         self._uid = ""
         self._csrf = ""
         self._load_cookies()
@@ -230,109 +505,89 @@ class BiliLikeApi:
         r = self.s.post(LIKE_REPORT, data=data, headers=headers, timeout=10).json()
         return r, click_time
 
-    def _task_loop(self, raw_room: str):
-        info, err = self.resolve_room(raw_room)
-        if not info:
-            print(f"[task] {err}")
-            self.running = False
-            return
-        if not info["live_status"]:
-            if not self.cfg.get("wait_live", True):
-                print("[task] 该直播间当前未开播, 点赞无效. 任务停止")
-                self.running = False
-                return
-            # 等开播: 每分钟查一次房间状态, 开播后自动开始
-            print("[task] 该直播间当前未开播, 每分钟自动检查一次...")
-            waited = 0
-            while not self._stop.is_set():
-                for _ in range(60):
-                    if self._stop.is_set():
-                        break
-                    time.sleep(1)
-                if self._stop.is_set():
-                    break
-                waited += 1
-                again, _err = self.resolve_room(raw_room)
-                if again and again["live_status"]:
-                    info = again
-                    print(f"[task] 检测到已开播(已等待 {waited} 分钟), 开始点赞")
-                    break
-                print(f"[task] 还没开播, 已等待 {waited} 分钟...")
-            if self._stop.is_set():
-                self.running = False
-                return
-        self.stats.update({"room": info["room_id"], "start": time.time()})
-        print(f"[task] 目标房间 {info['room_id']} (开播中), 开始点赞")
-        print(f"[task] 间隔 {self.cfg['interval_min']}~{self.cfg['interval_max']}s, "
-              f"每次连击 {self.cfg['click_min']}~{self.cfg['click_max']} 赞, "
-              f"上限 {self.cfg['max_likes']}")
-        while not self._stop.is_set():
-            delay = random.uniform(self.cfg["interval_min"], self.cfg["interval_max"])
-            end = time.time() + delay
-            while time.time() < end and not self._stop.is_set():
-                time.sleep(0.1)
-            if self._stop.is_set():
-                break
-            try:
-                r, click_time = self._like_once(info)
-            except Exception as e:
-                print(f"[task] 网络异常: {e}, 重试中")
-                time.sleep(3)
-                continue
-            self.stats["clicks"] += 1
-            code = r.get("code")
-            if code == 0:
-                self.stats["likes"] += click_time
-                print(f"[task] 第{self.stats['clicks']}次请求 OK (+{click_time} 赞, "
-                      f"累计 {self.stats['likes']})")
-            elif code == -101:
-                print("[task] 登录已失效! 请重新 login 或 paste. 任务停止")
-                break
-            elif code == -352:
-                print("[task] 触发风控(-352), 自动放慢速度...")
-                self.cfg["interval_min"] = min(self.cfg["interval_min"] + 3, 30)
-                self.cfg["interval_max"] = min(self.cfg["interval_max"] + 5, 60)
-                save_config(self.cfg)
-                time.sleep(10)
-            else:
-                print(f"[task] 返回异常 code={code} message={r.get('message')}")
-                time.sleep(3)
-            limit = self.cfg["max_likes"]
-            if limit and self.stats["likes"] >= limit:
-                print(f"[task] 已达单场点赞上限({limit}), 任务完成, 自动停止")
-                break
-        self.running = False
-        print("[task] 点赞已停止")
+    # ---------- 对外接口(兼容旧的单房间用法) ----------
+    @property
+    def running(self):
+        """是否有任务在跑(多房间时 = 任一任务存活)"""
+        return self.manager.active_count() > 0
+
+    @property
+    def stats(self):
+        """汇总统计(GUI / 网页端直接用这个)"""
+        likes, clicks = self.manager.totals()
+        starts = [t.started_at for t in self.manager.list() if t.started_at]
+        return {
+            "likes": likes,
+            "clicks": clicks,
+            "room": self.cfg.get("room", ""),
+            "start": min(starts) if starts else None,
+            "rooms": len(self.manager.list()),
+            "active": self.manager.active_count(),
+        }
+
+    def add_room(self, *rooms):
+        """添加房间任务(不启动)"""
+        ok, bad = self.manager.add_many(rooms)
+        for t in self.manager.list():
+            if t.raw in [normalize_room(r) for r in rooms]:
+                print(f"[task {t.short}] 已加入任务列表({t.state})")
+        for r, err in bad:
+            print(f"[task] {r}: {err}")
+        return ok
 
     def start(self, room: str = ""):
-        if self.running:
-            print("[task] 已在运行中")
-            return
+        """启动任务: 带房间号=添加并启动该房间; 不带=启动全部已添加的房间"""
         ok, uname = self.logged_in()
         if not ok:
             print("[task] 未登录! 请先输入 login 扫码 或 paste 粘贴Cookie")
             return
         self._uid = self.s.cookies.get("DedeUserID", "")
         self._csrf = self.s.cookies.get("bili_jct", "")
-        target = normalize_room(room) or self.cfg["room"]
-        if room:
+
+        target = normalize_room(room)
+        if target:
             self.cfg["room"] = target
             save_config(self.cfg)
-        self._stop.clear()
-        self.running = True
-        threading.Thread(target=self._task_loop, args=(target,), daemon=True).start()
+            task, err = self.manager.start(target)
+            if not task:
+                print(f"[task] {err}")
+                return
+            print(f"[task {task.short}] 已启动")
+            return
 
-    def stop(self):
-        if self.running:
-            self._stop.set()
-            print("[task] 正在停止...")
+        if not self.manager.list():
+            print("[task] 任务列表是空的, 先 add 房间号 或 go 房间号")
+            return
+        n = self.manager.start_all()
+        print(f"[task] 已启动 {n} 个房间任务"
+              f"(全局请求间隔 {self.manager.gate.min_gap:g}s, 避免并发特征)")
+
+    def stop(self, room: str = ""):
+        if room:
+            n = self.manager.stop(room)
+            print(f"[task] 正在停止 {normalize_room(room) or room} ..." if n
+                  else f"[task] 没找到房间 {room}")
+            return
+        n = self.manager.stop()
+        print(f"[task] 正在停止 {n} 个任务 ..." if n else "[task] 当前没有运行中的任务")
+
+    def remove_room(self, room):
+        return self.manager.remove(room)
 
     def status(self):
         ok, uname = self.logged_in()
-        dur = f", 已运行 {int(time.time()-self.stats['start'])}s" if self.stats["start"] else ""
-        print(f"[status] 账号: {uname if ok else '未登录'} | 房间: {self.cfg['room'] or '未设置'} | "
-              f"已点赞: {self.stats['likes']} ({self.stats['clicks']} 次请求){dur} | "
-              f"状态: {'运行中' if self.running else '空闲'}{'(暂停)' if self.paused else ''}")
+        likes, clicks = self.manager.totals()
+        tasks = self.manager.list()
+        active = self.manager.active_count()
+        print(f"[status] 账号: {uname if ok else '未登录'} | "
+              f"任务 {len(tasks)} 个(运行中 {active}) | "
+              f"已点赞 {likes} ({clicks} 次请求) | "
+              f"全局间隔 {self.manager.gate.min_gap:g}s | "
+              f"状态: {'运行中' if active else '空闲'}")
+        if tasks:
+            print("        房间            状态      已点赞  请求")
+            for t in tasks:
+                print(f"        {t.short:<14} {t.msg:<8} {t.likes:>6}  {t.clicks:>4}")
 
 
 def _setup_console():
@@ -360,7 +615,13 @@ def main():
     ok, uname = app.logged_in()
     print(f"[init] 登录状态: {uname if ok else '未登录 (先输入 login 或 paste)'}")
     print()
-    print("命令: login 扫码 | paste 粘贴Cookie | go [房间号] 开始 | stop | status | quit")
+    print("命令:")
+    print("  add 房间号 [房间号...]   添加房间任务(可一次多个)")
+    print("  list                     查看任务列表")
+    print("  go [房间号...]           启动(带房间号则先添加再启动; 不带则启动全部)")
+    print("  stop [房间号]            停止某个房间; 不带参数=全部停止")
+    print("  rm 房间号                移除任务")
+    print("  status / login / paste / quit")
     print("-" * 56)
     while True:
         try:
@@ -384,9 +645,26 @@ def main():
         elif low == "whoami":
             app.status()
         elif low == "go" or low.startswith("go "):
-            app.start(cmd[2:].strip())
-        elif low == "stop":
-            app.stop()
+            rooms = cmd[2:].split()
+            if rooms:
+                app.add_room(*rooms)          # 先加入任务列表
+            app.start()                       # 不带参数 = 启动全部
+        elif low == "add" or low.startswith("add "):
+            rooms = cmd[3:].split()
+            if not rooms:
+                print("用法: add 房间号 [房间号...]")
+            else:
+                app.add_room(*rooms)
+        elif low == "rm" or low.startswith("rm "):
+            rooms = cmd[2:].split()
+            if not rooms:
+                print("用法: rm 房间号")
+            for r in rooms:
+                print(f"[task] 已移除 {r}" if app.remove_room(r) else f"[task] 没找到 {r}")
+        elif low == "list":
+            app.status()
+        elif low == "stop" or low.startswith("stop "):
+            app.stop(cmd[4:].strip())
         elif low == "status":
             app.status()
         else:
