@@ -1,0 +1,12 @@
+# 凭据与个人配置, 严禁上传
+cookies.json
+config_api.json
+
+# Python
+__pycache__/
+*.pyc
+
+# PyInstaller 构建产物
+build/
+dist/
+*.spec
