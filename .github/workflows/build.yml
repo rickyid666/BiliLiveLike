@@ -36,6 +36,7 @@ jobs:
           } 2>&1 | tee "$RUNNER_TEMP/check.log"
       - name: Report errors on failure
         if: failure()
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python tools/report_ci_failure.py
@@ -69,6 +70,7 @@ jobs:
 
       - name: Report errors on failure
         if: failure()
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python tools/report_ci_failure.py

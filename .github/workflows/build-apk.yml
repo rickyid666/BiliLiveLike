@@ -41,6 +41,7 @@ jobs:
           } 2>&1 | tee "$RUNNER_TEMP/check.log"
       - name: Report errors on failure
         if: failure()
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python tools/report_ci_failure.py
@@ -112,6 +113,7 @@ jobs:
       # 构建失败时把关键错误行贴成提交评论 (便于无人值守排查)
       - name: Report errors on failure
         if: failure()
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python tools/report_ci_failure.py

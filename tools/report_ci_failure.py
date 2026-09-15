@@ -96,4 +96,9 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # 上报本身绝不能把 CI 弄挂: 出错只打印
+    try:
+        sys.exit(main())
+    except Exception as e:      # noqa: BLE001
+        print("report failed (ignored):", repr(e))
+        sys.exit(0)
