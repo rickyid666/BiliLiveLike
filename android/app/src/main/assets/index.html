@@ -317,7 +317,23 @@ textarea.input{min-height:132px;resize:vertical;font-family:var(--mono);font-siz
 .toast--err{background:var(--err);color:#fff}
 .toast--ok{background:var(--ok);color:#fff}
 
+/* 开关 (自动等开播) */
+.switch{display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-size:12.5px;
+  color:var(--text-2);min-height:34px}
+.switch input{position:absolute;opacity:0;width:0;height:0}
+.switch__track{position:relative;width:40px;height:22px;border-radius:999px;
+  background:var(--surface-3);border:1px solid var(--border-strong);flex:0 0 auto;
+  transition:background .22s ease,border-color .22s ease}
+.switch__thumb{position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:999px;
+  background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.28);
+  transition:transform .22s cubic-bezier(.2,.8,.3,1)}
+.switch input:checked + .switch__track{background:var(--brand);border-color:var(--brand)}
+.switch input:checked + .switch__track .switch__thumb{transform:translateX(18px)}
+.switch input:focus-visible + .switch__track{outline:2px solid var(--brand);outline-offset:2px}
+.switch input:disabled + .switch__track{opacity:.55}
+
 .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+
 </style>
 </head>
 <body>
@@ -396,6 +412,14 @@ textarea.input{min-height:132px;resize:vertical;font-family:var(--mono);font-siz
             <span class="param-row__name">单场上限</span>
             <input class="input input--sm" id="maxLikes" inputmode="numeric" value="1000">
             <span class="param-row__unit">赞</span>
+          </div>
+          <div class="param-row param-row--single">
+            <span class="param-row__name">自动等开播</span>
+            <label class="switch">
+              <input type="checkbox" id="waitLive" checked>
+              <span class="switch__track"><span class="switch__thumb"></span></span>
+              <span>未开播时每分钟自动检查，开播后自动开始</span>
+            </label>
           </div>
         </div>
       </div>
@@ -592,11 +616,12 @@ textarea.input{min-height:132px;resize:vertical;font-family:var(--mono);font-siz
       if (s.ck_min) $('ckMin').value = s.ck_min;
       if (s.ck_max) $('ckMax').value = s.ck_max;
       if (s.max_likes) $('maxLikes').value = s.max_likes;
+      if (typeof s.wait_live === 'boolean') $('waitLive').checked = s.wait_live;
     }
     $('btnStart').disabled = running;
     $('btnStop').disabled = !running;
     $('room').disabled = running;
-    ['ivMin', 'ivMax', 'ckMin', 'ckMax', 'maxLikes'].forEach(id => { $(id).disabled = running; });
+    ['ivMin', 'ivMax', 'ckMin', 'ckMax', 'maxLikes', 'waitLive'].forEach(id => { $(id).disabled = running; });
     lastRunning = running;
   }
 
@@ -633,6 +658,7 @@ textarea.input{min-height:132px;resize:vertical;font-family:var(--mono);font-siz
       interval_min: $('ivMin').value, interval_max: $('ivMax').value,
       click_min: $('ckMin').value, click_max: $('ckMax').value,
       max_likes: $('maxLikes').value,
+      wait_live: $('waitLive').checked,
     });
     if (r.ok) toast('已开始点赞 · 房间 ' + r.room, 'ok');
     else toast(r.error || '启动失败', 'err');

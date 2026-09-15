@@ -829,6 +829,13 @@ class App:
         self._param(well.body, "每次连击", self.ck_min, "赞", self.ck_max, "赞")
         self._param(well.body, "单场上限", self.max_likes, "赞", None, None)
 
+        wait_row = tk.Frame(well.body, bg=C.CARD_ALT)
+        wait_row.pack(fill="x")
+        self.wait_live = tk.BooleanVar(value=bool(cfg.get("wait_live", True)))
+        ttk.Checkbutton(wait_row, text="未开播时每分钟自动检查，开播后自动开始",
+                        variable=self.wait_live,
+                        style="Modern.TCheckbutton").pack(anchor="w")
+
         # --- 日志 ---
         logcard = Card(main, title="运行日志", parent_role="BG")
         self.log_card = logcard
@@ -1140,6 +1147,7 @@ class App:
         if cfg["click_min"] <= 0 or cfg["click_min"] > cfg["click_max"]:
             messagebox.showwarning("参数不对", "连击需要：下限 > 0 且 ≤ 上限")
             return False
+        cfg["wait_live"] = bool(self.wait_live.get())
         cfg["theme"] = self.theme
         core.save_config(cfg)
         return True
@@ -1176,6 +1184,20 @@ def setup_styles(root: tk.Tk):
         st.theme_use("clam")
     except Exception:
         pass
+    st.configure("Modern.TCheckbutton",
+                 background=C.CARD_ALT, foreground=C.TEXT_2,
+                 focuscolor=C.CARD_ALT, font=F.LABEL,
+                 indicatorbackground=C.CARD, indicatorforeground=C.PRIMARY,
+                 indicatormargin=(0, 0, S.SM, 0))
+    st.map("Modern.TCheckbutton",
+           background=[("active", C.CARD_ALT), ("disabled", C.CARD_ALT)],
+           foreground=[("disabled", C.DISABLED_FG)],
+           indicatorbackground=[("selected", C.PRIMARY),
+                                ("active", "selected", C.PRIMARY_HOVER),
+                                ("disabled", C.DISABLED_BG)],
+           indicatorforeground=[("selected", C.ON_PRIMARY),
+                                ("disabled", C.DISABLED_FG)])
+
     st.configure("Modern.TEntry",
                  fieldbackground=C.CARD_ALT, foreground=C.TEXT,
                  bordercolor=C.BORDER_STRONG, lightcolor=C.CARD_ALT,

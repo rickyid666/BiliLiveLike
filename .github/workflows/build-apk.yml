@@ -30,14 +30,11 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      # 直接用 runner 预装的 Android SDK (不再用 setup-android, 该 action 已失效)
+      # 直接用 runner 预装的 Android SDK (setup-android 这个 action 已失效)
       - name: Show Android SDK
         run: |
           echo "ANDROID_HOME=$ANDROID_HOME"
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
-          ls "$ANDROID_HOME" || true
           ls "$ANDROID_HOME/platforms" || true
-          ls "$ANDROID_HOME/build-tools" || true
 
       - name: Accept SDK licenses
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
@@ -50,12 +47,38 @@ jobs:
       - name: Write local.properties
         run: echo "sdk.dir=$ANDROID_HOME" > android/local.properties
 
-      - name: Build debug APK (可直接安装)
-        working-directory: android
-        run: gradle assembleDebug --no-daemon --stacktrace
+      # 固定签名 (可选): 仓库配置了 Secret 就用 release 签名, 否则退回 debug
+      - name: Prepare signing
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$KS_B64" ]; then
+            echo "::notice::未配置签名 Secret, 本次构建 debug 包 (装新版需先卸载旧版)"
+            exit 0
+          fi
+          printf '%s' "$KS_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          echo "keystore decoded: $(stat -c%s "$RUNNER_TEMP/release.keystore") bytes"
+          echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
 
-      - name: Rename APK
-        run: cp android/app/build/outputs/apk/debug/app-debug.apk BiliLiveLike.apk
+      - name: Build APK
+        working-directory: android
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ env.ANDROID_KEYSTORE_PATH }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$ANDROID_KEYSTORE_PATH" ] && [ -n "$ANDROID_KEYSTORE_PASSWORD" ]; then
+            echo "==> 使用固定签名构建 release 包"
+            gradle assembleRelease --no-daemon --stacktrace
+            APK=app/build/outputs/apk/release/app-release.apk
+          else
+            echo "==> 未配置签名, 回退 debug 包"
+            gradle assembleDebug --no-daemon --stacktrace
+            APK=app/build/outputs/apk/debug/app-debug.apk
+          fi
+          cp "$APK" ../BiliLiveLike.apk
+          ls -l ../BiliLiveLike.apk
 
       - name: Upload Artifact (Actions 页面可下载)
         uses: actions/upload-artifact@v4

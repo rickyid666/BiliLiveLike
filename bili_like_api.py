@@ -58,6 +58,7 @@ DEFAULT_CONFIG = {
     "click_min": 10,        # 每次请求的连击数下限 (相当于一次顶 10~20 赞)
     "click_max": 20,
     "max_likes": 1000,      # 单场直播点赞上限(B站单场点赞获取上限约1000)
+    "wait_live": True,      # 未开播时每分钟自动检查, 开播后自动开始
 }
 
 QR_GENERATE = "https://passport.bilibili.com/x/passport-login/web/qrcode/generate"
@@ -236,9 +237,30 @@ class BiliLikeApi:
             self.running = False
             return
         if not info["live_status"]:
-            print("[task] 该直播间当前未开播, 点赞无效. 任务停止")
-            self.running = False
-            return
+            if not self.cfg.get("wait_live", True):
+                print("[task] 该直播间当前未开播, 点赞无效. 任务停止")
+                self.running = False
+                return
+            # 等开播: 每分钟查一次房间状态, 开播后自动开始
+            print("[task] 该直播间当前未开播, 每分钟自动检查一次...")
+            waited = 0
+            while not self._stop.is_set():
+                for _ in range(60):
+                    if self._stop.is_set():
+                        break
+                    time.sleep(1)
+                if self._stop.is_set():
+                    break
+                waited += 1
+                again, _err = self.resolve_room(raw_room)
+                if again and again["live_status"]:
+                    info = again
+                    print(f"[task] 检测到已开播(已等待 {waited} 分钟), 开始点赞")
+                    break
+                print(f"[task] 还没开播, 已等待 {waited} 分钟...")
+            if self._stop.is_set():
+                self.running = False
+                return
         self.stats.update({"room": info["room_id"], "start": time.time()})
         print(f"[task] 目标房间 {info['room_id']} (开播中), 开始点赞")
         print(f"[task] 间隔 {self.cfg['interval_min']}~{self.cfg['interval_max']}s, "

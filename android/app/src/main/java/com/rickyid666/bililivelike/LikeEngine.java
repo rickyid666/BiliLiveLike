@@ -67,6 +67,8 @@ public class LikeEngine {
     public volatile int ckMin = 10;
     public volatile int ckMax = 20;
     public volatile int maxLikes = 1000;
+    public volatile boolean waitLive = true;   // 未开播时轮询等待
+    private static final int WAIT_INTERVAL_MS = 60 * 1000;
 
     private String cookie = "";
     private String csrf = "";
@@ -82,6 +84,7 @@ public class LikeEngine {
         ckMin = prefs.getInt("ckMin", 10);
         ckMax = prefs.getInt("ckMax", 20);
         maxLikes = prefs.getInt("maxLikes", 1000);
+        waitLive = prefs.getBoolean("waitLive", true);
     }
 
     public void setListener(Listener l) {
@@ -383,12 +386,14 @@ public class LikeEngine {
                 ckMin = Math.max(1, cfg.optInt("click_min", ckMin));
                 ckMax = Math.max(ckMin, cfg.optInt("click_max", ckMax));
                 maxLikes = Math.max(0, cfg.optInt("max_likes", maxLikes));
+                waitLive = cfg.optBoolean("wait_live", waitLive);
                 prefs.edit()
                         .putFloat("ivMin", (float) ivMin)
                         .putFloat("ivMax", (float) ivMax)
                         .putInt("ckMin", ckMin)
                         .putInt("ckMax", ckMax)
                         .putInt("maxLikes", maxLikes)
+                        .putBoolean("waitLive", waitLive)
                         .apply();
             }
             if (!checkLogin()) {
@@ -441,9 +446,39 @@ public class LikeEngine {
             long roomId = info.optLong("room_id");
             long anchorId = info.optLong("anchor_id");
             if (info.optInt("live_status", 0) == 0) {
-                log("[task] 该直播间当前未开播，点赞无效，任务停止");
-                running = false;
-                return;
+                if (!waitLive) {
+                    log("[task] 该直播间当前未开播，点赞无效，任务停止");
+                    running = false;
+                    return;
+                }
+                // 等开播: 每分钟查一次房间状态
+                log("[task] 该直播间当前未开播，每分钟自动检查一次…（可在参数里关闭「自动等开播」）");
+                boolean liveNow = false;
+                int waited = 0;
+                while (!stopFlag) {
+                    for (int i = 0; i < WAIT_INTERVAL_MS / 1000 && !stopFlag; i++) {
+                        Thread.sleep(1000);
+                    }
+                    if (stopFlag) {
+                        break;
+                    }
+                    waited += WAIT_INTERVAL_MS / 60000;
+                    JSONObject again = resolveRoom(shortRoom);
+                    if (again.optBoolean("ok") && again.optInt("live_status", 0) == 1) {
+                        roomId = again.optLong("room_id");
+                        anchorId = again.optLong("anchor_id");
+                        liveNow = true;
+                        break;
+                    }
+                    log("[task] 还没开播，已等待 " + waited + " 分钟…");
+                }
+                if (stopFlag) {
+                    running = false;
+                    return;
+                }
+                if (liveNow) {
+                    log("[task] 检测到已开播，开始点赞");
+                }
             }
             likes = 0;
             clicks = 0;
@@ -452,7 +487,6 @@ public class LikeEngine {
             log(String.format(Locale.US,
                     "[task] 间隔 %.1f~%.1fs，每次连击 %d~%d 赞，上限 %d",
                     ivMin, ivMax, ckMin, ckMax, maxLikes));
-
             while (!stopFlag) {
                 double span = Math.max(0.1, ivMax - ivMin);
                 long wait = (long) ((ivMin + rnd.nextDouble() * span) * 1000);
@@ -533,6 +567,7 @@ public class LikeEngine {
             o.put("ck_min", ckMin);
             o.put("ck_max", ckMax);
             o.put("max_likes", maxLikes);
+            o.put("wait_live", waitLive);
         } catch (Exception ignored) {
         }
         return o;

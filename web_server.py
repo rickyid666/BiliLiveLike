@@ -175,6 +175,7 @@ def collect_status():
         "running": running,
         "likes": s["likes"], "clicks": s["clicks"],
         "room": app.cfg.get("room", ""),
+        "wait_live": app.cfg.get("wait_live", True),
         "elapsed": elapsed,
         "qr_state": ST.qr_state, "qr_msg": ST.qr_msg,
     }
@@ -298,6 +299,7 @@ def build_handler(html_path):
                     cfg["click_min"] = max(1, int(body.get("click_min", 10)))
                     cfg["click_max"] = max(cfg["click_min"], int(body.get("click_max", 20)))
                     cfg["max_likes"] = max(0, int(body.get("max_likes", 1000)))
+                    cfg["wait_live"] = bool(body.get("wait_live", True))
                 except (TypeError, ValueError):
                     return self._send(200, {"ok": False, "error": "参数请填写数字"})
                 core.save_config(cfg)

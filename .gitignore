@@ -20,3 +20,6 @@ android/.idea/
 *.iml
 *.apk
 *.keystore
+*.jks
+*.p12
+*.b64
