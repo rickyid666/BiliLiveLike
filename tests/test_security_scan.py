@@ -141,6 +141,20 @@ class SecurityScanTest(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
     # ---------- .gitignore 覆盖 ----------
+    def test_generated_cookie_js_blocked(self):
+        """cookies.js(扩展用的凭据数据)也必须拦下 —— 内容是 JSON 形式,
+        不带 'SESSDATA=' 字样, 内容规则抓不到, 只能靠文件名规则"""
+        tmp = self.make_repo()
+        try:
+            with open(os.path.join(tmp, "cookies.js"), "w", encoding="utf-8") as f:
+                f.write('const BILI_COOKIES = [{"name": "SESSDATA", "value": "' + "a" * 40 + '"}];\n')
+            subprocess.run(["git", "add", "-A"], cwd=tmp, check=True)
+            code, data, out = self.run_scan(tmp, "--all")
+            self.assertEqual(code, 1, "cookies.js 必须被拦下\n" + out)
+            self.assertIn("FILE_COOKIE_DATA", self.rules(data))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
     def test_gitignore_check(self):
         tmp = tempfile.mkdtemp(prefix="bll_scan_")
         try:

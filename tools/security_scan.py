@@ -29,6 +29,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # 值: (规则ID, 中文说明)
 BLOCKED_FILES = {
     "cookies.json": ("FILE_COOKIE_JAR", "登录凭据(含 SESSDATA / bili_jct)"),
+    "cookies.js": ("FILE_COOKIE_DATA", "生成的 Cookie 数据文件(含真实凭据)"),
     "config_api.json": ("FILE_LOCAL_CONFIG", "本机运行配置(房间号/账号名)"),
     "local.properties": ("FILE_LOCAL_PATH", "本机路径(Android SDK)"),
 }
@@ -100,6 +101,7 @@ def is_placeholder(value):
 # 规则 ID -> 中文展示名 (只用于人看的输出)
 LABELS = {
     "FILE_COOKIE_JAR": "凭据文件",
+    "FILE_COOKIE_DATA": "凭据数据文件",
     "FILE_LOCAL_CONFIG": "本机配置",
     "FILE_LOCAL_PATH": "本机路径文件",
     "FILE_KEYSTORE": "签名密钥文件",
