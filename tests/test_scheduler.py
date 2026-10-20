@@ -193,6 +193,22 @@ class SchedulerTest(unittest.TestCase):
         self.assertTrue(task.thread.is_alive(), "放慢不等于退出, 任务应继续")
         task.stop()
 
+    def test_csrf_error_stops_task(self):
+        """-111 = cookie 里的 bili_jct 与 SESSDATA 不配对。
+
+        这种错误重试一万次也不可能成功。之前的实现把它归到"未知异常"分支,
+        每 3 秒重试一次, 表现为日志里刷屏的 -111 —— 必须一次就停并说清原因。
+        """
+        self.app = self.make_app()
+        eng = FakeEngine(codes=[-111] * 50)
+        eng.install(self.app)
+        task, _ = self.app.manager.start("111")
+
+        self.assertTrue(wait_until(lambda: task.state == "error", 3.0),
+                        "CSRF 失败应把任务标为 error")
+        self.assertEqual(len(eng.calls), 1, "CSRF 失败后不该继续重试")
+        self.assertIn("CSRF", task.msg)
+
     def test_max_likes_finishes_task(self):
         self.app = self.make_app(max_likes=20)
         FakeEngine().install(self.app)

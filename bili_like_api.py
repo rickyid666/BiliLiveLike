@@ -128,6 +128,7 @@ QR_GENERATE = "https://passport.bilibili.com/x/passport-login/web/qrcode/generat
 QR_POLL = "https://passport.bilibili.com/x/passport-login/web/qrcode/poll"
 ROOM_INIT = "https://api.live.bilibili.com/room/v1/Room/room_init?id={}"
 NAV = "https://api.bilibili.com/x/web-interface/nav"
+SPI = "https://api.bilibili.com/x/frontend/finger/spi"
 LIKE_REPORT = "https://api.live.bilibili.com/xlive/app-ucenter/v1/like_info_v3/like/likeReportV3"
 
 
@@ -320,6 +321,13 @@ class RoomTask:
                     self.state, self.msg = "error", "登录已失效"
                     self.log("登录已失效，请重新登录，任务停止")
                     return
+                elif code == -111:
+                    # CSRF 校验失败 = cookie 里的 bili_jct 与 SESSDATA 不是一对。
+                    # 这种错误重试一万次也不会成功, 必须停下来说清原因。
+                    self.state, self.msg = "error", "Cookie 不配对(CSRF)"
+                    self.log("CSRF 校验失败(-111)：cookie 里的 bili_jct 与 SESSDATA 不配对。")
+                    self.log("重试没有意义，任务已停止。请运行 get_client_cookie.py 重新取 Cookie。")
+                    return
                 elif code == -352:
                     self.msg = "风控降速中"
                     self.log("触发风控(-352)，自动放慢速度…")
@@ -471,6 +479,28 @@ class BiliLikeApi:
         except Exception:
             pass
 
+    def ensure_buvid(self):
+        """补齐设备指纹 buvid3/buvid4。
+
+        只有 SESSDATA + bili_jct 时, 写接口很容易直接返回 -352 (风控),
+        连 CSRF 都不会走到 —— 表现为"明明登录着却什么都点不了"。
+        向官方 spi 接口要一对新的即可 (等同浏览器首次访问)。
+        """
+        if self.s.cookies.get("buvid3"):
+            return True
+        try:
+            d = self.s.get(SPI, timeout=10).json().get("data") or {}
+            if d.get("b_3"):
+                self.s.cookies.set("buvid3", d["b_3"], domain=".bilibili.com")
+            if d.get("b_4"):
+                self.s.cookies.set("buvid4", d["b_4"], domain=".bilibili.com")
+            if d.get("b_3"):
+                self._save_cookies()
+                return True
+        except Exception:
+            pass
+        return False
+
     # ---------- Cookie ----------
     def _save_cookies(self):
         data = {c.name: c.value for c in self.s.cookies}
@@ -610,6 +640,9 @@ class BiliLikeApi:
             return
         self._uid = self.s.cookies.get("DedeUserID", "")
         self._csrf = self.s.cookies.get("bili_jct", "")
+        # 补设备指纹: 否则写接口可能先被 -352 风控挡住
+        if not self.ensure_buvid():
+            _safe_print("[task] 提示: 没能获取 buvid 设备指纹, 被风控拦截的概率会变高")
 
         target = normalize_room(room)
         if target:
